@@ -7,28 +7,26 @@
 </head>
 <body>
   <div class="app">
-    <header>
+    <header class="app-header">
       <h1>Meeting Intelligence Agent</h1>
+      <button class="gear-btn" id="gear-btn" type="button" aria-label="API key settings" aria-haspopup="true" aria-expanded="false">
+        <span class="gear-icon">⚙</span>
+        <span class="gear-status" id="gear-status" aria-hidden="true"></span>
+      </button>
+      <div id="api-key-section" class="settings-popover hidden" role="dialog" aria-label="Anthropic API Key">
+        <h2>Anthropic API Key</h2>
+        <div class="row">
+          <input
+            type="password"
+            id="api-key"
+            placeholder="sk-ant-..."
+            autocomplete="off"
+            spellcheck="false">
+          <button id="save-key-btn" type="button">Save</button>
+        </div>
+        <div id="key-status" class="hint"></div>
+      </div>
     </header>
-
-    <section class="api-key-section">
-      <label for="api-key">Anthropic API Key</label>
-      <div class="row">
-        <input
-          type="password"
-          id="api-key"
-          placeholder="sk-ant-..."
-          autocomplete="off"
-          spellcheck="false">
-        <button id="save-key-btn" type="button">Save</button>
-      </div>
-      <div id="key-status" class="hint"></div>
-      <div id="mcp-status" class="hint"></div>
-      <div class="row google-row">
-        <div id="google-status" class="hint"></div>
-        <button id="connect-google-btn" type="button" class="hidden">Connect Google Calendar</button>
-      </div>
-    </section>
 
     <section class="query-section">
       <label>What would you like help with?</label>
@@ -54,7 +52,11 @@
     </section>
 
     <section id="reasoning-section" class="reasoning-section hidden">
-      <h2>Agent Reasoning Chain</h2>
+      <div class="section-toggle" id="reasoning-toggle" role="button" tabindex="0">
+        <h2>Agent Reasoning Chain</h2>
+        <span class="section-meta" id="reasoning-meta"></span>
+        <span class="section-chevron">▾</span>
+      </div>
       <div id="steps"></div>
     </section>
 
@@ -69,8 +71,8 @@
     </section>
   </div>
 
+  <script src="mockData.js"></script>
   <script src="tools.js"></script>
-  <script src="mcpClient.js"></script>
   <script src="api.js"></script>
   <script src="agent.js"></script>
   <script src="popup.js"></script>

@@ -4,18 +4,20 @@
 
 (function () {
   // ---------- DOM refs ----------
-  const apiKeyInput      = document.getElementById("api-key");
-  const saveKeyBtn       = document.getElementById("save-key-btn");
-  const keyStatus        = document.getElementById("key-status");
-  const mcpStatus        = document.getElementById("mcp-status");
-  const googleStatus     = document.getElementById("google-status");
-  const connectGoogleBtn = document.getElementById("connect-google-btn");
+  const apiKeySection = document.getElementById("api-key-section");
+  const gearBtn       = document.getElementById("gear-btn");
+  const gearStatus    = document.getElementById("gear-status");
+  const apiKeyInput   = document.getElementById("api-key");
+  const saveKeyBtn    = document.getElementById("save-key-btn");
+  const keyStatus     = document.getElementById("key-status");
 
   const customQuery = document.getElementById("custom-query");
   const runBtn      = document.getElementById("run-btn");
   const quickBtns   = document.querySelectorAll(".quick-btn");
 
   const reasoningSection = document.getElementById("reasoning-section");
+  const reasoningToggle  = document.getElementById("reasoning-toggle");
+  const reasoningMeta    = document.getElementById("reasoning-meta");
   const stepsContainer   = document.getElementById("steps");
 
   const briefSection = document.getElementById("brief-section");
@@ -28,60 +30,27 @@
   const stepNodes = new Map();
   let running = false;
 
-  // ---------- Init: load saved key + check MCP server ----------
+  // ---------- Init: load saved key ----------
   (async function init() {
     try {
       const { anthropicApiKey } = await chrome.storage.local.get("anthropicApiKey");
       if (anthropicApiKey) {
         apiKeyInput.value = anthropicApiKey;
         showKeyStatus("Key loaded from storage.", "success");
+        setKeyStatusIndicator("saved");
+      } else {
+        setKeyStatusIndicator("unset");
+        // No key on first open — pop the settings so the user sees the field.
+        openSettings();
       }
     } catch (err) {
       showKeyStatus(`Failed to load key: ${err.message}`, "error");
+      setKeyStatusIndicator("error");
     }
-    refreshMcpStatus();
   })();
-
-  async function refreshMcpStatus() {
-    showMcpStatus("Checking MCP server...", null);
-    const ok = await checkMcpServer();
-    if (ok) {
-      showMcpStatus(`MCP server: connected (${MCP_SERVER_URL})`, "success");
-      await refreshGoogleStatus();
-    } else {
-      showMcpStatus(`MCP server: not reachable at ${MCP_SERVER_URL}. Start it with 'npm start' in mcp-server/.`, "error");
-      showGoogleStatus("", null);
-      connectGoogleBtn.classList.add("hidden");
-    }
-  }
-
-  async function refreshGoogleStatus() {
-    showGoogleStatus("Checking Google Calendar...", null);
-    const status = await fetchGoogleOAuthStatus();
-    if (!status) {
-      showGoogleStatus("Google Calendar: status unavailable.", "error");
-      connectGoogleBtn.classList.add("hidden");
-      return;
-    }
-    if (!status.configured) {
-      showGoogleStatus("Google Calendar: not configured. See mcp-server/SETUP-GOOGLE.md.", "error");
-      connectGoogleBtn.classList.add("hidden");
-      return;
-    }
-    if (status.authenticated) {
-      showGoogleStatus("Google Calendar: connected.", "success");
-      connectGoogleBtn.classList.add("hidden");
-      return;
-    }
-    showGoogleStatus("Google Calendar: not connected.", "error");
-    connectGoogleBtn.classList.remove("hidden");
-  }
 
   // ---------- Event wiring ----------
   saveKeyBtn.addEventListener("click", onSaveKey);
-  connectGoogleBtn.addEventListener("click", () => {
-    chrome.tabs.create({ url: googleOAuthStartUrl() });
-  });
   runBtn.addEventListener("click", () => onRun(customQuery.value.trim()));
   customQuery.addEventListener("keydown", e => {
     if (e.key === "Enter") onRun(customQuery.value.trim());
@@ -89,6 +58,32 @@
   for (const btn of quickBtns) {
     btn.addEventListener("click", () => onRun(btn.dataset.query));
   }
+  reasoningToggle.addEventListener("click", () => {
+    reasoningSection.classList.toggle("collapsed");
+  });
+  reasoningToggle.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      reasoningSection.classList.toggle("collapsed");
+    }
+  });
+  gearBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    toggleSettings();
+  });
+  // Close on click outside the popover or gear button.
+  document.addEventListener("mousedown", e => {
+    if (apiKeySection.classList.contains("hidden")) return;
+    if (apiKeySection.contains(e.target) || gearBtn.contains(e.target)) return;
+    closeSettings();
+  });
+  // Close on Escape when the popover is open.
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !apiKeySection.classList.contains("hidden")) {
+      closeSettings();
+      gearBtn.focus();
+    }
+  });
 
   // ---------- Handlers ----------
   async function onSaveKey() {
@@ -100,8 +95,11 @@
     try {
       await setApiKey(key);
       showKeyStatus("Key saved.", "success");
+      setKeyStatusIndicator("saved");
+      closeSettings();
     } catch (err) {
       showKeyStatus(`Save failed: ${err.message}`, "error");
+      setKeyStatusIndicator("error");
     }
   }
 
@@ -149,14 +147,15 @@
 
   function createStepNode(step) {
     const wrapper = document.createElement("div");
-    wrapper.className = "step";
+    // Default-collapsed: only the header is visible until the user opens it
+    // (or until an error auto-expands it).
+    wrapper.className = "step collapsed";
 
     const header = document.createElement("div");
     header.className = "step-header";
     header.innerHTML = `
       <span class="step-icon"></span>
       <span class="step-num">Step ${step.stepId}</span>
-      <span class="step-origin"></span>
       <span class="step-tool"></span>
       <span class="step-summary"></span>
       <span class="step-chevron">▾</span>
@@ -172,22 +171,18 @@
   }
 
   function updateStepNode(node, step) {
-    // Status class drives icon color.
-    node.className = `step step-status-${step.status}`;
-    if (step.status === "success") node.classList.add("collapsed");
+    // Always collapse: the status icon (✓ / ❌ / ⏳) plus the summary text
+    // give enough at-a-glance signal. The user clicks to drill in.
+    node.className = `step step-status-${step.status} collapsed`;
+    updateReasoningMeta();
 
     const iconEl    = node.querySelector(".step-icon");
     const toolEl    = node.querySelector(".step-tool");
-    const originEl  = node.querySelector(".step-origin");
     const summaryEl = node.querySelector(".step-summary");
     const body      = node.querySelector(".step-body");
 
     iconEl.textContent = iconFor(step.status);
     toolEl.textContent = `${step.toolName}()`;
-    if (step.origin) {
-      originEl.textContent = step.origin === "mcp" ? "MCP" : "LOCAL";
-      originEl.className = `step-origin step-origin-${step.origin}`;
-    }
     summaryEl.textContent = summaryFor(step);
 
     body.innerHTML = "";
@@ -195,8 +190,7 @@
     body.appendChild(makeSection("Input", JSON.stringify(step.toolInput || {}, null, 2)));
 
     if (step.status === "success") {
-      const resultStr = JSON.stringify(step.result, null, 2);
-      body.appendChild(makeSection("Result", resultStr));
+      body.appendChild(renderToolResult(step.toolName, step.result));
       if (step.retried) {
         body.appendChild(makeNote("Recovered after one retry."));
       }
@@ -209,6 +203,27 @@
       body.appendChild(makeSection("Error", detail, true));
     }
     // For "loading", body just shows Input.
+  }
+
+  function updateReasoningMeta() {
+    const total = stepNodes.size;
+    if (!total) {
+      reasoningMeta.textContent = "";
+      return;
+    }
+    let errors = 0;
+    let inFlight = 0;
+    for (const node of stepNodes.values()) {
+      if (node.classList.contains("step-status-error")) errors++;
+      else if (
+        node.classList.contains("step-status-loading") ||
+        node.classList.contains("step-status-retrying")
+      ) inFlight++;
+    }
+    const parts = [`${total} step${total === 1 ? "" : "s"}`];
+    if (inFlight) parts.push(`${inFlight} running`);
+    if (errors)   parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
+    reasoningMeta.textContent = parts.join(" · ");
   }
 
   function iconFor(status) {
@@ -234,11 +249,111 @@
   function summarizeResult(result) {
     if (Array.isArray(result)) return `${result.length} item${result.length === 1 ? "" : "s"}`;
     if (result && typeof result === "object") {
-      if (typeof result.totalMeetings === "number") return `${result.totalMeetings} meetings`;
-      if (result.name) return result.name;
+      if (typeof result.totalMeetings === "number") {
+        const parts = [`${result.totalMeetings} meeting${result.totalMeetings === 1 ? "" : "s"}`];
+        if (result.totalHours)  parts.push(`${result.totalHours} hrs`);
+        if (result.busiestDay)  parts.push(`busiest ${result.busiestDay.slice(0, 3)}`);
+        return parts.join(" · ");
+      }
+      if (result.name)  return result.name;
       if (result.title) return result.title;
     }
     return "ok";
+  }
+
+  // Per-tool result renderers. Default falls back to a JSON dump.
+  function renderToolResult(toolName, result) {
+    if (toolName === "calculateMeetingStats" && result && typeof result === "object") {
+      return renderMeetingStatsCard(result);
+    }
+    return makeSection("Result", JSON.stringify(result, null, 2));
+  }
+
+  function renderMeetingStatsCard(stats) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "stats-card";
+
+    // 2x2 metric tiles
+    const tiles = [
+      ["Total Meetings", stats.totalMeetings ?? 0, ""],
+      ["Total Hours",    stats.totalHours    ?? 0, "hrs"],
+      ["Avg Duration",   stats.averageDurationHours ?? 0, "hrs"],
+      ["Busiest Day",    stats.busiestDay || "—", ""]
+    ];
+    const grid = document.createElement("div");
+    grid.className = "stats-grid";
+    for (const [label, value, unit] of tiles) {
+      const tile = document.createElement("div");
+      tile.className = "stat-tile";
+      const labelEl = document.createElement("div");
+      labelEl.className = "stat-label";
+      labelEl.textContent = label;
+      const valueEl = document.createElement("div");
+      valueEl.className = "stat-value";
+      valueEl.textContent = String(value);
+      if (unit) {
+        const unitEl = document.createElement("span");
+        unitEl.className = "stat-unit";
+        unitEl.textContent = ` ${unit}`;
+        valueEl.appendChild(unitEl);
+      }
+      tile.appendChild(labelEl);
+      tile.appendChild(valueEl);
+      grid.appendChild(tile);
+    }
+    wrapper.appendChild(grid);
+
+    // Day distribution bar chart (calendar order, only days with meetings)
+    const dist = stats.meetingDistribution || {};
+    const dayOrder = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+    const present = dayOrder.filter(d => dist[d] > 0);
+    if (present.length) {
+      const heading = document.createElement("div");
+      heading.className = "stats-chart-label";
+      heading.textContent = "Distribution by Day";
+      wrapper.appendChild(heading);
+
+      const chart = document.createElement("div");
+      chart.className = "bar-chart";
+      const max = Math.max(...present.map(d => dist[d]));
+      for (const day of present) {
+        const count = dist[day];
+        const pct = max > 0 ? (count / max) * 100 : 0;
+
+        const row = document.createElement("div");
+        row.className = "bar-row";
+
+        const label = document.createElement("span");
+        label.className = "bar-label";
+        label.textContent = day.slice(0, 3);
+
+        const bar = document.createElement("div");
+        bar.className = "bar";
+        const fill = document.createElement("div");
+        fill.className = "bar-fill";
+        fill.style.width = `${pct.toFixed(1)}%`;
+        bar.appendChild(fill);
+
+        const value = document.createElement("span");
+        value.className = "bar-value";
+        value.textContent = String(count);
+
+        row.appendChild(label);
+        row.appendChild(bar);
+        row.appendChild(value);
+        chart.appendChild(row);
+      }
+      wrapper.appendChild(chart);
+    }
+
+    if (stats.timeframe && stats.timeframe !== "n/a") {
+      const tf = document.createElement("div");
+      tf.className = "stats-timeframe";
+      tf.textContent = `Timeframe: ${stats.timeframe}`;
+      wrapper.appendChild(tf);
+    }
+
+    return wrapper;
   }
 
   function makeSection(label, content, isError) {
@@ -265,10 +380,32 @@
   }
 
   function handleAssistantText(text) {
-    // Inline reasoning prose Claude emits between tool calls.
+    // Reasoning prose Claude emits between tool calls. Rendered as a
+    // collapsible "thought" — header always visible, body hidden by default.
     const node = document.createElement("div");
-    node.className = "assistant-text";
-    node.textContent = text;
+    node.className = "assistant-text collapsed";
+
+    const header = document.createElement("div");
+    header.className = "assistant-text-header";
+
+    const preview = text.replace(/\s+/g, " ").trim();
+    const truncated = preview.length > 80 ? preview.slice(0, 80) + "…" : preview;
+
+    header.innerHTML = `
+      <span class="assistant-text-icon">💭</span>
+      <span class="assistant-text-preview"></span>
+      <span class="step-chevron">▾</span>
+    `;
+    header.querySelector(".assistant-text-preview").textContent = truncated;
+
+    const body = document.createElement("div");
+    body.className = "assistant-text-body";
+    body.textContent = text;
+
+    node.appendChild(header);
+    node.appendChild(body);
+    header.addEventListener("click", () => node.classList.toggle("collapsed"));
+
     stepsContainer.appendChild(node);
   }
 
@@ -276,6 +413,193 @@
     if (!text) return;
     briefSection.classList.remove("hidden");
     briefEl.innerHTML = renderMarkdown(text);
+    postProcessBrief(briefEl);
+  }
+
+  // ---------- Brief post-processing ----------
+  // The markdown renderer produces flat HTML (h1, p, h2, ul, etc.).
+  //   - Single h1 → render as hero card with sections below.
+  //   - Multiple h1s → wrap each h1+content in a collapsible meeting card.
+  //   - h2 sections within either form become typed blocks (attendees,
+  //     emails, talking-points, checklist, etc.).
+  function postProcessBrief(root) {
+    const children = [...root.children];
+    const groups = [];
+    const preamble = [];
+    let group = null;
+
+    for (const el of children) {
+      if (el.tagName === "H1") {
+        group = { h1: el, content: [] };
+        groups.push(group);
+      } else if (group) {
+        group.content.push(el);
+      } else {
+        preamble.push(el);
+      }
+    }
+
+    root.innerHTML = "";
+    for (const el of preamble) root.appendChild(el);
+
+    if (groups.length <= 1) {
+      // Zero or one meeting: keep flat structure (with hero if present)
+      if (groups.length === 1) {
+        root.appendChild(groups[0].h1);
+        for (const el of groups[0].content) root.appendChild(el);
+      }
+      groupBlocks(root);
+      if (groups.length === 1) decorateHero(root);
+    } else {
+      // Multiple meetings: collapsible cards, all collapsed by default
+      for (const g of groups) root.appendChild(buildMeetingCard(g));
+    }
+  }
+
+  // Wrap every h2 + its following content (until the next h2) into a
+  // typed .brief-block container, then apply per-block transforms.
+  function groupBlocks(scope) {
+    const children = [...scope.children];
+    const next = [];
+    let block = null;
+
+    for (const el of children) {
+      if (el.tagName === "H2") {
+        const type = blockType(el.textContent);
+        block = document.createElement("div");
+        block.className = `brief-block brief-block--${type}`;
+        block.dataset.type = type;
+        block.appendChild(el);
+        next.push(block);
+      } else if (block) {
+        block.appendChild(el);
+      } else {
+        next.push(el);
+      }
+    }
+
+    scope.innerHTML = "";
+    for (const c of next) scope.appendChild(c);
+
+    for (const blk of scope.querySelectorAll(".brief-block")) {
+      transformBlock(blk, blk.dataset.type);
+    }
+  }
+
+  function buildMeetingCard(group) {
+    const card = document.createElement("div");
+    card.className = "meeting-card collapsed";
+
+    const header = document.createElement("div");
+    header.className = "meeting-card-header";
+    header.setAttribute("role", "button");
+    header.setAttribute("tabindex", "0");
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "meeting-card-title-row";
+    group.h1.classList.add("meeting-card-title");
+    titleRow.appendChild(group.h1);
+
+    const chevron = document.createElement("span");
+    chevron.className = "meeting-card-chevron";
+    chevron.textContent = "▾";
+    titleRow.appendChild(chevron);
+
+    header.appendChild(titleRow);
+
+    // Pull the first paragraph (When/Where/Agenda meta) into the header
+    if (group.content.length > 0 && group.content[0].tagName === "P") {
+      const meta = group.content.shift();
+      meta.classList.add("meeting-card-meta");
+      header.appendChild(meta);
+    }
+
+    card.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "meeting-card-body";
+    for (const el of group.content) body.appendChild(el);
+    groupBlocks(body);
+    card.appendChild(body);
+
+    const toggle = () => card.classList.toggle("collapsed");
+    header.addEventListener("click", toggle);
+    header.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle();
+      }
+    });
+
+    return card;
+  }
+
+  function blockType(headingText) {
+    const t = headingText.toLowerCase();
+    if (t.includes("attendee"))                      return "attendees";
+    if (t.includes("compan"))                        return "company";
+    if (t.includes("email"))                         return "emails";
+    if (t.includes("talking") || t.includes("topic")) return "talking-points";
+    if (t.includes("prep") || t.includes("checklist")) return "checklist";
+    if (t.includes("agenda"))                        return "agenda";
+    if (t.includes("risk") || t.includes("gap"))     return "risks";
+    return "default";
+  }
+
+  function decorateHero(root) {
+    const h1 = root.querySelector("h1");
+    if (!h1) return;
+    const hero = document.createElement("div");
+    hero.className = "brief-hero";
+    h1.parentNode.insertBefore(hero, h1);
+    hero.appendChild(h1);
+    // Pull the first paragraph (the When/Where/Agenda meta) into the hero.
+    const meta = hero.nextElementSibling;
+    if (meta && meta.tagName === "P") {
+      meta.classList.add("brief-meta");
+      hero.appendChild(meta);
+    }
+  }
+
+  function transformBlock(block, type) {
+    if (type === "attendees") {
+      for (const li of block.querySelectorAll("li")) {
+        if (li.classList.contains("checklist")) continue;
+        li.classList.add("attendee-card");
+        const strong = li.querySelector("strong");
+        const initial = strong
+          ? strong.textContent.trim().charAt(0).toUpperCase()
+          : "?";
+        const avatar = document.createElement("span");
+        avatar.className = "attendee-avatar";
+        avatar.textContent = initial;
+        const content = document.createElement("span");
+        content.className = "attendee-content";
+        while (li.firstChild) content.appendChild(li.firstChild);
+        li.appendChild(avatar);
+        li.appendChild(content);
+      }
+    } else if (type === "emails") {
+      for (const li of block.querySelectorAll("li")) {
+        if (li.classList.contains("checklist")) continue;
+        li.classList.add("email-card");
+      }
+    } else if (type === "talking-points") {
+      let n = 1;
+      for (const li of block.querySelectorAll("li")) {
+        if (li.classList.contains("checklist")) continue;
+        li.classList.add("talking-point");
+        const num = document.createElement("span");
+        num.className = "talking-point-num";
+        num.textContent = String(n++);
+        const content = document.createElement("span");
+        content.className = "talking-point-content";
+        while (li.firstChild) content.appendChild(li.firstChild);
+        li.appendChild(num);
+        li.appendChild(content);
+      }
+    }
+    // checklist: existing .checklist class handles its own styling.
   }
 
   function handleError(err) {
@@ -311,14 +635,27 @@
     keyStatus.className = `hint ${kind || ""}`.trim();
   }
 
-  function showMcpStatus(message, kind) {
-    mcpStatus.textContent = message;
-    mcpStatus.className = `hint ${kind || ""}`.trim();
+  function setKeyStatusIndicator(state) {
+    // state ∈ "saved" | "unset" | "error" — drives the gear-button dot color.
+    gearStatus.className = `gear-status ${state}`;
   }
 
-  function showGoogleStatus(message, kind) {
-    googleStatus.textContent = message;
-    googleStatus.className = `hint ${kind || ""}`.trim();
+  function openSettings() {
+    apiKeySection.classList.remove("hidden");
+    gearBtn.classList.add("open");
+    gearBtn.setAttribute("aria-expanded", "true");
+    apiKeyInput.focus();
+  }
+
+  function closeSettings() {
+    apiKeySection.classList.add("hidden");
+    gearBtn.classList.remove("open");
+    gearBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleSettings() {
+    if (apiKeySection.classList.contains("hidden")) openSettings();
+    else closeSettings();
   }
 
   // ---------- Minimal Markdown renderer ----------
