@@ -200,82 +200,66 @@ User sees: Step-by-step reasoning + final brief
 ## **4. Agent Flow Architecture**
 
 ### **Multi-Step Reasoning Flow**
+
+Worked example for *"Prepare me for my next meeting"* — typically 3 LLM turns with a batch of parallel tool calls in the middle.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ User Input: "Prepare me for my next meeting"               │
+│ User Input: "Prepare me for my next meeting"                │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 1: Call LLM with user query + available tools         │
-│ → LLM decides: "I need to fetch upcoming meetings first"   │
+│ Turn 1: agent.js → Gemini API                               │
+│ Sent: user query + 5 tool definitions + system prompt       │
+│ Returned: 1 tool_use → getUpcomingMeetings({hoursAhead:24}) │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 2: Execute tool_use → getUpcomingMeetings(24)         │
-│ → Returns: [Meeting with Acme Corp at 2 PM, ...]           │
+│ Local exec: getUpcomingMeetings(24)                         │
+│ Returns: [Meeting with Acme Corp at 2 PM, ...]              │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 3: Call LLM with conversation history + tool result   │
-│ → LLM decides: "Now research attendees from Acme Corp"     │
+│ Turn 2: agent.js → Gemini API                               │
+│ Sent: full history + meeting list                           │
+│ Returned: 4 tool_use blocks (parallel):                     │
+│   - analyzeAttendeeBackground("john@acme.com")              │
+│   - analyzeAttendeeBackground("jane@acme.com")              │
+│   - searchWebInfo("Acme Corp", type: "company")             │
+│   - searchGmail("Acme")                                     │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 4: Execute tool_use → analyzeAttendeeBackground()     │
-│ → Returns: {John Doe - VP Engineering, ...}                │
+│ Local exec (sequential, in returned order):                 │
+│ Each tool runs; on error, retry once before surfacing       │
+│ All 4 results pushed into history as one user turn          │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 5: Call LLM with full history + new tool result       │
-│ → LLM decides: "Search for company information"            │
+│ Turn 3: agent.js → Gemini API                               │
+│ Sent: full history + all 4 tool results                     │
+│ Returned: final markdown brief, no tool_use blocks          │
+│ (stop_reason = end_turn → loop exits)                       │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 6: Execute tool_use → searchWebInfo("Acme Corp")      │
-│ → Returns: [Company profile, recent news, ...]             │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 7: Call LLM with full history + company info          │
-│ → LLM decides: "Find related emails"                       │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 8: Execute tool_use → searchGmail("Acme Corp")        │
-│ → Returns: [3 email threads about pricing, demo, ...]      │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 9: Call LLM with ALL accumulated context              │
-│ → LLM decides: "I have enough info, generate brief"        │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 10: Execute tool_use → generateMeetingBrief()         │
-│ → Returns: Comprehensive meeting preparation document      │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Final Response: Display brief + reasoning chain to user    │
+│ popup.js renders: collapsible reasoning chain +             │
+│ structured brief (hero + attendees + talking points + ...)  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### **Key Architecture Points**
-1. **Conversation History**: Each LLM call includes ALL previous messages + tool results
-2. **Tool Selection**: LLM autonomously decides which tool to use next
-3. **Iterative Refinement**: Agent continues until task is complete
-4. **Visible Reasoning**: UI shows every step in real-time
+1. **Conversation History**: Each LLM call includes ALL previous messages + tool results — the API is stateless.
+2. **Parallel Tool Calls**: A single LLM turn can request multiple tool calls; the harness executes them sequentially in returned order, then sends all results back as one user turn.
+3. **Iterative Refinement**: Agent continues until the model returns no tool_use blocks (`stop_reason: "end_turn"`). A 10-iteration safety cap prevents runaways.
+4. **Per-step Retry**: Failed tool calls retry once silently; persistent failures surface as `is_error: true` tool results so the model can adapt.
+5. **Visible Reasoning**: The UI streams every step (tool name, inputs, results) in real-time as collapsible rows.
 
 ---
 

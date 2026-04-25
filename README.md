@@ -72,6 +72,69 @@ The diagram above shows where files live. This one shows what runs in a single u
 
 Tools always run inside the extension. Gemini never sees calendar data, email contents, or attendee profiles directly — it only sees the JSON our tools return. Gemini's role is to decide *which* tool to call next and to write the final brief from the accumulated tool results.
 
+### Multi-step reasoning flow
+
+Worked example for *"Prepare me for my next meeting"* — typically 3 LLM turns with a batch of parallel tool calls in the middle.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ User Input: "Prepare me for my next meeting"                │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Turn 1: agent.js → Gemini API                               │
+│ Sent: user query + 5 tool definitions + system prompt       │
+│ Returned: 1 tool_use → getUpcomingMeetings({hoursAhead:24}) │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Local exec: getUpcomingMeetings(24)                         │
+│ Returns: [Meeting with Acme Corp at 2 PM, ...]              │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Turn 2: agent.js → Gemini API                               │
+│ Sent: full history + meeting list                           │
+│ Returned: 4 tool_use blocks (parallel):                     │
+│   - analyzeAttendeeBackground("john@acme.com")              │
+│   - analyzeAttendeeBackground("jane@acme.com")              │
+│   - searchWebInfo("Acme Corp", type: "company")             │
+│   - searchGmail("Acme")                                     │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Local exec (sequential, in returned order):                 │
+│ Each tool runs; on error, retry once before surfacing       │
+│ All 4 results pushed into history as one user turn          │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Turn 3: agent.js → Gemini API                               │
+│ Sent: full history + all 4 tool results                     │
+│ Returned: final markdown brief, no tool_use blocks          │
+│ (stop_reason = end_turn → loop exits)                       │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ popup.js renders: collapsible reasoning chain +             │
+│ structured brief (hero + attendees + talking points + ...)  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key architecture points:**
+
+1. **Conversation history** — each LLM call includes ALL previous messages + tool results. The API is stateless.
+2. **Parallel tool calls** — a single LLM turn can request multiple tool calls; the harness executes them sequentially in returned order, then sends all results back as one user turn.
+3. **Iterative refinement** — agent continues until the model returns no `tool_use` blocks (`stop_reason: "end_turn"`). A 10-iteration safety cap prevents runaways.
+4. **Per-step retry** — failed tool calls retry once silently; persistent failures surface as `is_error: true` tool results so the model can adapt.
+5. **Visible reasoning** — the UI streams every step (tool name, inputs, results) in real-time as collapsible rows.
+
 ### Key design choices
 
 - **No backend, no MCP server.** The extension calls `generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` directly with the `x-goog-api-key` header. All tools are local JavaScript functions reading from `mockData.js` — no network beyond Google.
