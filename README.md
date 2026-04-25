@@ -32,6 +32,46 @@ It plans, calls 3–7 tools (calendar, email, web/LinkedIn, attendee profiles, s
             └─ direct browser → generativelanguage.googleapis.com
 ```
 
+### Agent flow
+
+The diagram above shows where files live. This one shows what runs in a single user query: the agent loop calls Gemini, lets it decide which tools to invoke, executes those tools locally, feeds the results back, and repeats until Gemini stops asking for tools.
+
+```
+┌──────────────────────────────────────────┐
+│         CHROME EXTENSION                 │
+│  ┌────────────────────────────────────┐ │
+│  │  User Interface (popup.html)       │ │
+│  └──────────────┬─────────────────────┘ │
+│                 │                        │
+│  ┌──────────────▼─────────────────────┐ │
+│  │  Agent Loop (agent.js)             │ │
+│  │  - Manages conversation history    │ │
+│  │  - Calls Gemini API repeatedly     │ │
+│  │  - Streams reasoning chain to UI   │ │
+│  │  - Retries failed tool calls once  │ │
+│  └──────────────┬─────────────────────┘ │
+│                 │                        │
+│  ┌──────────────▼─────────────────────┐ │
+│  │  Local Tools (tools.js)            │ │
+│  │  - getUpcomingMeetings             │ │
+│  │  - searchGmail                     │ │
+│  │  - searchWebInfo                   │ │
+│  │  - analyzeAttendeeBackground       │ │
+│  │  - calculateMeetingStats           │ │
+│  └────────────────────────────────────┘ │
+└──────────────────────────────────────────┘
+              ↓
+    ┌─────────────────────────┐
+    │   Gemini 2.5 Flash      │
+    │   Typically 3–5 turns   │
+    │   (parallel tool calls; │
+    │   10-iteration cap)     │
+    │   Decides tool order    │
+    └─────────────────────────┘
+```
+
+Tools always run inside the extension. Gemini never sees calendar data, email contents, or attendee profiles directly — it only sees the JSON our tools return. Gemini's role is to decide *which* tool to call next and to write the final brief from the accumulated tool results.
+
 ### Key design choices
 
 - **No backend, no MCP server.** The extension calls `generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` directly with the `x-goog-api-key` header. All tools are local JavaScript functions reading from `mockData.js` — no network beyond Google.
