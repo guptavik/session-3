@@ -1,740 +1,519 @@
-# **Meeting Intelligence Agent - Hybrid Architecture**
+# **Meeting Intelligence Agent - Chrome Extension**
+## **Complete Technical Specification**
 
-## **Architecture Overview**
+---
 
+## **1. Overview**
+
+### **Purpose**
+An agentic AI Chrome extension that prepares users for upcoming meetings by autonomously gathering context through multi-step reasoning and external tool calls.
+
+### **Core Value Proposition**
+- LLM alone: ❌ Cannot access calendar, emails, or external data
+- Agent with tools: ✓ Fetches real data, performs analysis, generates actionable briefs
+
+### **Assignment Alignment**
+- ✅ Multi-step LLM calls with full conversation history
+- ✅ External tool/API calls (calendar, email, web search)
+- ✅ Tasks LLM cannot do alone (data fetching, calculations)
+- ✅ Visible reasoning chain in UI
+- ✅ 5+ custom tools
+
+---
+
+## **2. User Stories**
+
+### **Primary Use Case**
+```
+User clicks: "Prepare for my next meeting"
+
+Agent executes:
+1. Fetches upcoming meetings from calendar
+2. Researches each attendee's background
+3. Searches company information
+4. Finds related email threads
+5. Calculates meeting statistics
+6. Generates comprehensive meeting brief
+
+User sees: Step-by-step reasoning + final brief
+```
+
+### **Example Queries**
+1. *"Prepare me for my next meeting"*
+2. *"Show me all meetings today and research the attendees"*
+3. *"What's my meeting load this week?"*
+4. *"Find context about my 2 PM meeting with Acme Corp"*
+
+---
+
+## **3. Custom Tools (Minimum 5)**
+
+### **Tool 1: `getUpcomingMeetings`**
+```javascript
+{
+  name: "getUpcomingMeetings",
+  description: "Fetches upcoming meetings from user's calendar",
+  parameters: {
+    hoursAhead: "number (default: 24) - How many hours to look ahead"
+  },
+  returns: [
+    {
+      id: "meeting_123",
+      title: "Product Demo with Acme Corp",
+      startTime: "2024-01-15T14:00:00Z",
+      endTime: "2024-01-15T15:00:00Z",
+      attendees: ["john.doe@acme.com", "jane.smith@acme.com"],
+      location: "Zoom",
+      description: "Discuss Q1 roadmap and pricing"
+    }
+  ]
+}
+```
+
+**Implementation**: Mock data (to avoid OAuth complexity)
+
+---
+
+### **Tool 2: `searchGmail`**
+```javascript
+{
+  name: "searchGmail",
+  description: "Searches user's email for relevant context",
+  parameters: {
+    query: "string - Search keywords (e.g., 'Acme Corp product demo')",
+    maxResults: "number (default: 5)"
+  },
+  returns: [
+    {
+      subject: "Re: Product Demo Preparation",
+      from: "john.doe@acme.com",
+      date: "2024-01-10",
+      snippet: "Looking forward to discussing pricing tiers..."
+    }
+  ]
+}
+```
+
+**Implementation**: Mock email database
+
+---
+
+### **Tool 3: `searchWebInfo`**
+```javascript
+{
+  name: "searchWebInfo",
+  description: "Searches the web for information about companies or people",
+  parameters: {
+    query: "string - What to search for",
+    type: "string - 'company' or 'person'"
+  },
+  returns: [
+    {
+      title: "Acme Corp - Company Profile",
+      snippet: "B2B SaaS company, 500 employees, recently raised $50M...",
+      url: "https://acme.com/about"
+    }
+  ]
+}
+```
+
+**Implementation**: Real web search (DuckDuckGo API or scraping)
+
+---
+
+### **Tool 4: `analyzeAttendeeBackground`**
+```javascript
+{
+  name: "analyzeAttendeeBackground",
+  description: "Researches professional background of meeting attendees",
+  parameters: {
+    name: "string - Person's name",
+    email: "string - Email address",
+    company: "string - Company name"
+  },
+  returns: {
+    name: "John Doe",
+    currentRole: "VP of Engineering",
+    company: "Acme Corp",
+    background: "10 years at Acme, previously at Google Cloud",
+    linkedInUrl: "https://linkedin.com/in/johndoe"
+  }
+}
+```
+
+**Implementation**: Mock data + optional web search
+
+---
+
+### **Tool 5: `calculateMeetingStats`**
+```javascript
+{
+  name: "calculateMeetingStats",
+  description: "Calculates statistics about meeting schedule",
+  parameters: {
+    meetings: "array - List of meeting objects",
+    timeframe: "string - 'today', 'week', 'month'"
+  },
+  returns: {
+    totalMeetings: 12,
+    totalHours: 18.5,
+    averageDuration: 1.54,
+    busiestDay: "Wednesday",
+    meetingDistribution: {
+      "Monday": 2,
+      "Tuesday": 3,
+      "Wednesday": 5,
+      "Thursday": 1,
+      "Friday": 1
+    }
+  }
+}
+```
+
+**Implementation**: Real calculation logic
+
+---
+
+### **Bonus Tool 6: `generateMeetingBrief`**
+```javascript
+{
+  name: "generateMeetingBrief",
+  description: "Synthesizes all gathered information into actionable brief",
+  parameters: {
+    meetingData: "object - All collected meeting context"
+  },
+  returns: {
+    summary: "Meeting with Acme Corp at 2 PM...",
+    attendees: [...],
+    companyContext: "...",
+    emailContext: "...",
+    talkingPoints: ["Discuss pricing", "Address Q1 concerns"],
+    preparationTips: ["Review pricing deck", "Prepare demo environment"]
+  }
+}
+```
+
+**Implementation**: LLM synthesis of all tool results
+
+---
+
+## **4. Agent Flow Architecture**
+
+### **Multi-Step Reasoning Flow**
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Chrome Extension                         │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │  Frontend UI (popup.html + popup.js)               │    │
-│  │  - User input                                       │    │
-│  │  - Reasoning chain display                         │    │
-│  │  - API key management                              │    │
-│  └────────────────┬───────────────────────────────────┘    │
-│                   │                                         │
-│  ┌────────────────▼───────────────────────────────────┐    │
-│  │  Local Tools (tools.js)                            │    │
-│  │  - calculateMeetingStats() [MATH/CALCULATIONS]     │    │
-│  │  - formatMeetingBrief() [DATA FORMATTING]          │    │
-│  └────────────────────────────────────────────────────┘    │
-└──────────────────┬──────────────────────────────────────────┘
-                   │
-                   │ Calls Claude API with:
-                   │ - Local tools (defined in extension)
-                   │ - MCP server URL (for external tools)
-                   │
-                   ▼
-        ┌──────────────────────────┐
-        │   Anthropic Claude API   │
-        │    (Agent Orchestrator)  │
-        └────┬──────────────┬──────┘
-             │              │
-    ┌────────▼─────┐   ┌────▼────────────────┐
-    │ Local Tools  │   │   MCP Server        │
-    │ (in extension)│   │ (localhost:3000)    │
-    └──────────────┘   └─────────────────────┘
-                              │
-                    ┌─────────┴──────────┐
-                    │                    │
-            ┌───────▼────────┐  ┌────────▼──────────┐
-            │ getUpcoming    │  │ searchGmail       │
-            │ Meetings       │  │                   │
-            │ [EXTERNAL API] │  │ [EXTERNAL API]    │
-            └────────────────┘  └───────────────────┘
-                    │
-            ┌───────▼────────┐
-            │ searchWebInfo  │
-            │ [WEB SCRAPING] │
-            └────────────────┘
+│ User Input: "Prepare me for my next meeting"               │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 1: Call LLM with user query + available tools         │
+│ → LLM decides: "I need to fetch upcoming meetings first"   │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 2: Execute tool_use → getUpcomingMeetings(24)         │
+│ → Returns: [Meeting with Acme Corp at 2 PM, ...]           │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 3: Call LLM with conversation history + tool result   │
+│ → LLM decides: "Now research attendees from Acme Corp"     │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 4: Execute tool_use → analyzeAttendeeBackground()     │
+│ → Returns: {John Doe - VP Engineering, ...}                │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 5: Call LLM with full history + new tool result       │
+│ → LLM decides: "Search for company information"            │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 6: Execute tool_use → searchWebInfo("Acme Corp")      │
+│ → Returns: [Company profile, recent news, ...]             │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 7: Call LLM with full history + company info          │
+│ → LLM decides: "Find related emails"                       │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 8: Execute tool_use → searchGmail("Acme Corp")        │
+│ → Returns: [3 email threads about pricing, demo, ...]      │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 9: Call LLM with ALL accumulated context              │
+│ → LLM decides: "I have enough info, generate brief"        │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 10: Execute tool_use → generateMeetingBrief()         │
+│ → Returns: Comprehensive meeting preparation document      │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Final Response: Display brief + reasoning chain to user    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### **Key Architecture Points**
+1. **Conversation History**: Each LLM call includes ALL previous messages + tool results
+2. **Tool Selection**: LLM autonomously decides which tool to use next
+3. **Iterative Refinement**: Agent continues until task is complete
+4. **Visible Reasoning**: UI shows every step in real-time
+
+---
+
+## **5. UI/UX Design**
+
+### **Extension Popup Layout**
+```
+┌──────────────────────────────────────────────────┐
+│  🤖 Meeting Intelligence Agent                   │
+├──────────────────────────────────────────────────┤
+│                                                  │
+│  API Key: [●●●●●●●●●●●●●●●●●●●●] [Save]         │
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │  What would you like help with?            │ │
+│  │                                            │ │
+│  │  [Prepare for next meeting]               │ │
+│  │  [Show all meetings today]                │ │
+│  │  [Calculate meeting stats]                │ │
+│  │                                            │ │
+│  │  Or type custom query:                    │ │
+│  │  [________________________________]  [Go]  │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+│  ═══════════════════════════════════════════    │
+│                                                  │
+│  🔄 Agent Reasoning Chain:                      │
+│                                                  │
+│  ▼ Step 1: Fetching upcoming meetings           │
+│    Tool: getUpcomingMeetings(24)               │
+│    Input: { hoursAhead: 24 }                   │
+│    ✓ Result: Found 1 meeting                    │
+│    └─ "Product Demo with Acme Corp - 2 PM"     │
+│                                                  │
+│  ▼ Step 2: Researching attendees                │
+│    Tool: analyzeAttendeeBackground()           │
+│    Input: { name: "John Doe", email: "..." }   │
+│    ⏳ Loading...                                │
+│                                                  │
+│  ⏸ Step 3: Pending...                           │
+│                                                  │
+│  ═══════════════════════════════════════════    │
+│                                                  │
+│  📄 Final Meeting Brief:                        │
+│  [Will appear after agent completes all steps] │
+│                                                  │
+└──────────────────────────────────────────────────┘
+```
+
+### **UI Components**
+
+1. **API Key Input** (persistent storage)
+2. **Quick Action Buttons** (pre-defined queries)
+3. **Custom Query Input** (free-form text)
+4. **Reasoning Chain Display**:
+   - Each step is collapsible
+   - Shows: Step number, tool name, inputs, outputs
+   - Real-time status: ⏳ Loading, ✓ Success, ❌ Error
+5. **Final Result Section** (highlighted summary)
+
+---
+
+## **6. Technical Stack**
+
+### **Frontend**
+- Pure HTML/CSS/JavaScript (no frameworks)
+- Chrome Extension Manifest V3
+- LocalStorage for API key persistence
+
+### **Backend/API**
+- Anthropic Claude API (Sonnet 4)
+- Tool calling via function definitions
+- Conversation history management
+
+### **External APIs**
+- Mock Calendar Data (hardcoded JSON)
+- Mock Gmail Data (hardcoded JSON)
+- Real Web Search (optional: DuckDuckGo, Google Custom Search)
+
+---
+
+## **7. File Structure**
+
+```
+meeting-intelligence-agent/
+├── manifest.json           # Chrome extension config
+├── popup.html              # Main UI
+├── popup.js                # UI logic & event handlers
+├── agent.js                # Core agent logic
+├── tools.js                # Tool definitions & implementations
+├── api.js                  # Claude API wrapper
+├── styles.css              # Styling
+├── mockData.js             # Mock calendar/email data
+└── icons/
+    ├── icon16.png
+    ├── icon48.png
+    └── icon128.png
 ```
 
 ---
 
-## **Tool Distribution Strategy**
+## **8. Core Code Structure**
 
-### **MCP Server Tools (3 tools)** - External Data Access
-These require external APIs, network calls, or heavy processing:
-
-1. **`getUpcomingMeetings`** - Mock Google Calendar API
-2. **`searchGmail`** - Mock Gmail search
-3. **`searchWebInfo`** - Real web scraping/search
-
-### **Local Extension Tools (2 tools)** - Calculations & Formatting
-These are pure functions that don't need external services:
-
-4. **`calculateMeetingStats`** - Math calculations on meeting data
-5. **`formatMeetingBrief`** - Data transformation/formatting
-
----
-
-## **Detailed Tool Specs**
-
-### **MCP Server Tools**
-
-#### **Tool 1: `getUpcomingMeetings`** (MCP)
-```json
-{
-  "name": "getUpcomingMeetings",
-  "description": "Fetches upcoming meetings from user's calendar",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "hoursAhead": {
-        "type": "number",
-        "description": "Number of hours to look ahead (default: 24)"
-      }
-    }
-  }
-}
-```
-
-**Why MCP?** Simulates external calendar API access
-
-**Implementation:** Returns mock meeting data from MCP server
-
----
-
-#### **Tool 2: `searchGmail`** (MCP)
-```json
-{
-  "name": "searchGmail",
-  "description": "Searches user's Gmail for emails matching query",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "query": {
-        "type": "string",
-        "description": "Search keywords (e.g., 'Acme Corp pricing')"
-      },
-      "maxResults": {
-        "type": "number",
-        "description": "Maximum number of results (default: 5)"
-      }
-    },
-    "required": ["query"]
-  }
-}
-```
-
-**Why MCP?** Simulates external email API access
-
-**Implementation:** Returns mock email threads from MCP server
-
----
-
-#### **Tool 3: `searchWebInfo`** (MCP)
-```json
-{
-  "name": "searchWebInfo",
-  "description": "Searches the web for company or person information",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "query": {
-        "type": "string",
-        "description": "What to search for"
-      },
-      "searchType": {
-        "type": "string",
-        "enum": ["company", "person", "general"],
-        "description": "Type of search"
-      }
-    },
-    "required": ["query"]
-  }
-}
-```
-
-**Why MCP?** Real web scraping/API calls
-
-**Implementation:** Could use DuckDuckGo API or mock data
-
----
-
-### **Local Extension Tools**
-
-#### **Tool 4: `calculateMeetingStats`** (Local)
-```json
-{
-  "name": "calculateMeetingStats",
-  "description": "Calculates statistics about meetings (total time, distribution, etc.)",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "meetings": {
-        "type": "array",
-        "description": "Array of meeting objects"
-      },
-      "timeframe": {
-        "type": "string",
-        "enum": ["today", "week", "month"],
-        "description": "Timeframe to analyze"
-      }
-    },
-    "required": ["meetings"]
-  }
-}
-```
-
-**Why Local?** Pure calculation, no external dependencies
-
-**Implementation:**
+### **tools.js - Tool Definitions**
 ```javascript
-function calculateMeetingStats(meetings, timeframe) {
-  const totalMeetings = meetings.length;
-  const totalMinutes = meetings.reduce((sum, m) => {
-    const duration = (new Date(m.endTime) - new Date(m.startTime)) / 60000;
-    return sum + duration;
-  }, 0);
-  
-  const totalHours = totalMinutes / 60;
-  const avgDuration = totalMinutes / totalMeetings;
-  
-  // Calculate busiest day
-  const dayCount = {};
-  meetings.forEach(m => {
-    const day = new Date(m.startTime).toLocaleDateString('en-US', { weekday: 'long' });
-    dayCount[day] = (dayCount[day] || 0) + 1;
-  });
-  
-  const busiestDay = Object.keys(dayCount).reduce((a, b) => 
-    dayCount[a] > dayCount[b] ? a : b
-  );
-  
-  return {
-    totalMeetings,
-    totalHours: totalHours.toFixed(2),
-    averageDuration: avgDuration.toFixed(0),
-    busiestDay,
-    meetingDistribution: dayCount
-  };
-}
-```
-
----
-
-#### **Tool 5: `formatMeetingBrief`** (Local)
-```json
-{
-  "name": "formatMeetingBrief",
-  "description": "Formats collected meeting data into a structured brief",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "meetingData": {
-        "type": "object",
-        "description": "Raw meeting information"
-      },
-      "attendeeInfo": {
-        "type": "array",
-        "description": "Attendee background information"
-      },
-      "emailContext": {
-        "type": "array",
-        "description": "Related email threads"
-      }
-    },
-    "required": ["meetingData"]
-  }
-}
-```
-
-**Why Local?** Pure data transformation
-
-**Implementation:**
-```javascript
-function formatMeetingBrief(meetingData, attendeeInfo = [], emailContext = []) {
-  return {
-    meetingTitle: meetingData.title,
-    scheduledTime: new Date(meetingData.startTime).toLocaleString(),
-    duration: `${(new Date(meetingData.endTime) - new Date(meetingData.startTime)) / 60000} minutes`,
-    attendees: attendeeInfo.map(a => ({
-      name: a.name,
-      role: a.currentRole,
-      company: a.company
-    })),
-    recentEmails: emailContext.map(e => ({
-      subject: e.subject,
-      date: e.date,
-      summary: e.snippet
-    })),
-    preparationChecklist: [
-      "Review attendee backgrounds",
-      "Prepare demo environment",
-      "Review recent email threads",
-      "Prepare questions based on context"
-    ]
-  };
-}
-```
-
----
-
-## **MCP Server Implementation**
-
-### **File: `mcp-server/server.js`**
-
-```javascript
-import express from 'express';
-import cors from 'cors';
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// Mock data
-const MOCK_MEETINGS = [
+const TOOLS = [
   {
-    id: "meeting_1",
-    title: "Product Demo with Acme Corp",
-    startTime: "2024-01-15T14:00:00Z",
-    endTime: "2024-01-15T15:00:00Z",
-    attendees: ["john.doe@acme.com", "jane.smith@acme.com"],
-    location: "Zoom",
-    description: "Discuss Q1 roadmap and pricing options"
-  },
-  {
-    id: "meeting_2",
-    title: "Weekly Team Sync",
-    startTime: "2024-01-15T10:00:00Z",
-    endTime: "2024-01-15T10:30:00Z",
-    attendees: ["team@company.com"],
-    location: "Conference Room A",
-    description: "Sprint planning and blockers"
-  }
-];
-
-const MOCK_EMAILS = [
-  {
-    id: "email_1",
-    subject: "Re: Product Demo Preparation",
-    from: "john.doe@acme.com",
-    date: "2024-01-10",
-    snippet: "Looking forward to the demo. Particularly interested in the enterprise pricing tier and API integration capabilities."
-  },
-  {
-    id: "email_2",
-    subject: "Acme Corp - Follow up questions",
-    from: "jane.smith@acme.com",
-    date: "2024-01-12",
-    snippet: "Can you provide case studies from similar companies in the fintech space?"
-  }
-];
-
-// MCP Protocol: List available tools
-app.get('/mcp/list_tools', (req, res) => {
-  res.json({
-    tools: [
-      {
-        name: "getUpcomingMeetings",
-        description: "Fetches upcoming meetings from user's calendar",
-        inputSchema: {
-          type: "object",
-          properties: {
-            hoursAhead: {
-              type: "number",
-              description: "Number of hours to look ahead (default: 24)"
-            }
-          }
-        }
-      },
-      {
-        name: "searchGmail",
-        description: "Searches user's Gmail for emails matching query",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "Search keywords" },
-            maxResults: { type: "number", description: "Max results (default: 5)" }
-          },
-          required: ["query"]
-        }
-      },
-      {
-        name: "searchWebInfo",
-        description: "Searches the web for company or person information",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "What to search for" },
-            searchType: {
-              type: "string",
-              enum: ["company", "person", "general"]
-            }
-          },
-          required: ["query"]
-        }
-      }
-    ]
-  });
-});
-
-// MCP Protocol: Call a tool
-app.post('/mcp/call_tool', (req, res) => {
-  const { name, arguments: args } = req.body;
-  
-  switch(name) {
-    case "getUpcomingMeetings":
-      const hoursAhead = args.hoursAhead || 24;
-      const cutoffTime = new Date(Date.now() + hoursAhead * 60 * 60 * 1000);
-      const upcomingMeetings = MOCK_MEETINGS.filter(m => 
-        new Date(m.startTime) <= cutoffTime
-      );
-      res.json({ content: [{ type: "text", text: JSON.stringify(upcomingMeetings, null, 2) }] });
-      break;
-      
-    case "searchGmail":
-      const query = args.query.toLowerCase();
-      const maxResults = args.maxResults || 5;
-      const matchingEmails = MOCK_EMAILS.filter(e =>
-        e.subject.toLowerCase().includes(query) ||
-        e.snippet.toLowerCase().includes(query) ||
-        e.from.toLowerCase().includes(query)
-      ).slice(0, maxResults);
-      res.json({ content: [{ type: "text", text: JSON.stringify(matchingEmails, null, 2) }] });
-      break;
-      
-    case "searchWebInfo":
-      // Mock web search results
-      const searchResults = [
-        {
-          title: "Acme Corp - Company Profile",
-          snippet: "B2B SaaS company specializing in enterprise solutions. 500+ employees, recently raised $50M Series B funding.",
-          url: "https://acme.com/about"
-        },
-        {
-          title: "Acme Corp News - Tech Crunch",
-          snippet: "Acme Corp announces new AI-powered features and expansion into European markets.",
-          url: "https://techcrunch.com/acme-news"
-        }
-      ];
-      res.json({ content: [{ type: "text", text: JSON.stringify(searchResults, null, 2) }] });
-      break;
-      
-    default:
-      res.status(404).json({ error: "Tool not found" });
-  }
-});
-
-const PORT = 3000;
-app.listen(PORT, () => {
-  console.log(`✅ MCP Server running on http://localhost:${PORT}`);
-  console.log(`📡 Tools available: getUpcomingMeetings, searchGmail, searchWebInfo`);
-});
-```
-
-### **File: `mcp-server/package.json`**
-```json
-{
-  "name": "meeting-intelligence-mcp-server",
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5"
-  },
-  "scripts": {
-    "start": "node server.js"
-  }
-}
-```
-
----
-
-## **Chrome Extension Implementation**
-
-### **File: `manifest.json`**
-```json
-{
-  "manifest_version": 3,
-  "name": "Meeting Intelligence Agent",
-  "version": "1.0.0",
-  "description": "Agentic AI assistant for meeting preparation",
-  "permissions": ["storage"],
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
-}
-```
-
----
-
-### **File: `popup.html`**
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Meeting Intelligence Agent</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <div class="container">
-    <header>
-      <h1>🤖 Meeting Intelligence Agent</h1>
-      <p class="subtitle">Hybrid Architecture: MCP + Local Tools</p>
-    </header>
-
-    <section class="config-section">
-      <label for="apiKey">Claude API Key:</label>
-      <input type="password" id="apiKey" placeholder="sk-ant-...">
-      <button id="saveKey">Save</button>
-      <span id="keyStatus"></span>
-    </section>
-
-    <section class="query-section">
-      <h3>What would you like help with?</h3>
-      <div class="quick-actions">
-        <button class="action-btn" data-query="Prepare me for my next meeting">
-          📅 Next Meeting
-        </button>
-        <button class="action-btn" data-query="Show all my meetings today">
-          📊 Today's Schedule
-        </button>
-        <button class="action-btn" data-query="Calculate my meeting statistics for this week">
-          📈 Meeting Stats
-        </button>
-      </div>
-      
-      <div class="custom-query">
-        <input type="text" id="customQuery" placeholder="Or type your own query...">
-        <button id="runQuery">Go</button>
-      </div>
-    </section>
-
-    <section class="reasoning-section" id="reasoningSection" style="display: none;">
-      <h3>🔄 Agent Reasoning Chain</h3>
-      <div id="reasoningSteps"></div>
-    </section>
-
-    <section class="result-section" id="resultSection" style="display: none;">
-      <h3>📄 Final Result</h3>
-      <div id="finalResult"></div>
-    </section>
-  </div>
-
-  <script src="tools.js"></script>
-  <script src="api.js"></script>
-  <script src="agent.js"></script>
-  <script src="popup.js"></script>
-</body>
-</html>
-```
-
----
-
-### **File: `tools.js`** (Local Tools)
-```javascript
-// Local tool definitions (these run in the extension)
-const LOCAL_TOOLS = [
-  {
-    name: "calculateMeetingStats",
-    description: "Calculates statistics about meetings (total time, distribution, busiest day)",
+    name: "getUpcomingMeetings",
+    description: "Fetches upcoming meetings from calendar",
     input_schema: {
       type: "object",
       properties: {
-        meetings: {
-          type: "array",
-          description: "Array of meeting objects with startTime and endTime"
-        },
-        timeframe: {
-          type: "string",
-          enum: ["today", "week", "month"],
-          description: "Timeframe to analyze"
-        }
+        hoursAhead: { type: "number", description: "Hours to look ahead" }
       },
-      required: ["meetings"]
+      required: []
     }
   },
-  {
-    name: "formatMeetingBrief",
-    description: "Formats collected meeting data into a structured brief with preparation tips",
-    input_schema: {
-      type: "object",
-      properties: {
-        meetingData: {
-          type: "object",
-          description: "Meeting information (title, time, attendees, description)"
-        },
-        attendeeInfo: {
-          type: "array",
-          description: "Optional attendee background information"
-        },
-        emailContext: {
-          type: "array",
-          description: "Optional related email threads"
-        }
-      },
-      required: ["meetingData"]
-    }
-  }
+  // ... 4 more tools
 ];
 
-// Local tool implementations
-function calculateMeetingStats(meetings, timeframe = "week") {
-  const totalMeetings = meetings.length;
-  
-  let totalMinutes = 0;
-  const dayCount = {};
-  
-  meetings.forEach(meeting => {
-    // Calculate duration
-    const start = new Date(meeting.startTime);
-    const end = new Date(meeting.endTime);
-    const duration = (end - start) / 60000; // minutes
-    totalMinutes += duration;
-    
-    // Count by day
-    const day = start.toLocaleDateString('en-US', { weekday: 'long' });
-    dayCount[day] = (dayCount[day] || 0) + 1;
-  });
-  
-  const totalHours = totalMinutes / 60;
-  const avgDuration = totalMeetings > 0 ? totalMinutes / totalMeetings : 0;
-  
-  const busiestDay = Object.keys(dayCount).length > 0
-    ? Object.keys(dayCount).reduce((a, b) => dayCount[a] > dayCount[b] ? a : b)
-    : "N/A";
-  
-  return {
-    totalMeetings,
-    totalHours: totalHours.toFixed(2),
-    averageDuration: avgDuration.toFixed(0) + " minutes",
-    busiestDay,
-    meetingDistribution: dayCount,
-    timeframe
-  };
-}
-
-function formatMeetingBrief(meetingData, attendeeInfo = [], emailContext = []) {
-  const start = new Date(meetingData.startTime);
-  const end = new Date(meetingData.endTime);
-  const duration = Math.round((end - start) / 60000);
-  
-  return {
-    title: meetingData.title,
-    scheduledTime: start.toLocaleString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }),
-    duration: `${duration} minutes`,
-    location: meetingData.location || "Not specified",
-    description: meetingData.description || "No description provided",
-    attendees: attendeeInfo.length > 0 ? attendeeInfo : meetingData.attendees,
-    relatedEmails: emailContext.length > 0 ? emailContext.map(e => ({
-      subject: e.subject,
-      from: e.from,
-      date: e.date,
-      preview: e.snippet
-    })) : [],
-    preparationTips: [
-      "Review attendee backgrounds and roles",
-      "Prepare questions based on email context",
-      "Set up demo environment if needed",
-      "Review meeting objectives and agenda"
-    ]
-  };
-}
-
-// Execute local tools
-function executeLocalTool(toolName, toolInput) {
+async function executeTool(toolName, toolInput) {
   switch(toolName) {
-    case "calculateMeetingStats":
-      return calculateMeetingStats(toolInput.meetings, toolInput.timeframe);
-    case "formatMeetingBrief":
-      return formatMeetingBrief(
-        toolInput.meetingData,
-        toolInput.attendeeInfo,
-        toolInput.emailContext
-      );
-    default:
-      throw new Error(`Unknown local tool: ${toolName}`);
+    case "getUpcomingMeetings":
+      return await getUpcomingMeetings(toolInput);
+    case "searchGmail":
+      return await searchGmail(toolInput);
+    // ... etc
   }
 }
 ```
 
----
-
-### **File: `api.js`** (Claude API Wrapper)
+### **agent.js - Main Agent Loop**
 ```javascript
-const MCP_SERVER_URL = "http://localhost:3000";
-
-async function callClaude(messages, apiKey) {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      messages: messages,
-      tools: LOCAL_TOOLS,  // Local tools defined in extension
-      // Note: MCP server tools would be accessed via separate MCP protocol calls
-    })
-  });
+async function runAgent(userQuery, apiKey) {
+  const conversationHistory = [
+    { role: "user", content: userQuery }
+  ];
   
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(`Claude API error: ${error.error?.message || 'Unknown error'}`);
-  }
+  let agentRunning = true;
+  let stepNumber = 1;
   
-  return await response.json();
-}
-
-// Call MCP server tool
-async function callMCPTool(toolName, toolInput) {
-  const response = await fetch(`${MCP_SERVER_URL}/mcp/call_tool`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      name: toolName,
-      arguments: toolInput
-    })
-  });
-  
-  if (!response.ok) {
-    throw new Error(`MCP tool call failed: ${toolName}`);
-  }
-  
-  const result = await response.json();
-  return JSON.parse(result.content[0].text);
-}
-
-// Check if MCP server is running
-async function checkMCPServer() {
-  try {
-    const response = await fetch(`${MCP_SERVER_URL}/mcp/list_tools`);
-    return response.ok;
-  } catch (e) {
-    return false;
+  while (agentRunning) {
+    // Call Claude with full history + tools
+    const response = await callClaude(conversationHistory, TOOLS, apiKey);
+    
+    // Check if Claude wants to use a tool
+    if (response.stop_reason === "tool_use") {
+      for (const contentBlock of response.content) {
+        if (contentBlock.type === "tool_use") {
+          // Display tool call in UI
+          displayStep(stepNumber, contentBlock.name, contentBlock.input, "loading");
+          
+          // Execute the tool
+          const toolResult = await executeTool(contentBlock.name, contentBlock.input);
+          
+          // Update UI with result
+          displayStep(stepNumber, contentBlock.name, contentBlock.input, "success", toolResult);
+          
+          // Add tool result to conversation
+          conversationHistory.push({
+            role: "assistant",
+            content: response.content
+          });
+          conversationHistory.push({
+            role: "user",
+            content: [{
+              type: "tool_result",
+              tool_use_id: contentBlock.id,
+              content: JSON.stringify(toolResult)
+            }]
+          });
+          
+          stepNumber++;
+        }
+      }
+    } else {
+      // Agent is done - display final answer
+      const finalAnswer = response.content.find(b => b.type === "text")?.text;
+      displayFinalResult(finalAnswer);
+      agentRunning = false;
+    }
   }
 }
 ```
 
 ---
 
-**Should I continue with the rest of the files (agent.js, popup.js, styles.css)?** 🚀
+## **9. Assignment Compliance Checklist**
 
-This is looking great so far - we have:
-- ✅ MCP Server with 3 external tools
-- ✅ Local extension with 2 calculation tools
-- ✅ Clean separation of concerns
-- ✅ Ready for multi-step agentic behavior
+- ✅ **Multi-step LLM calls**: Agent calls Claude 5-7 times
+- ✅ **Full conversation history**: Each call includes ALL previous messages + tool results
+- ✅ **External tool calls**: Calendar, Gmail, Web Search APIs
+- ✅ **Visible reasoning chain**: UI displays every step with inputs/outputs
+- ✅ **5+ custom tools**: getUpcomingMeetings, searchGmail, searchWebInfo, analyzeAttendeeBackground, calculateMeetingStats, generateMeetingBrief
+- ✅ **Complex task**: LLM cannot access calendar/email alone
+- ✅ **Agent decides flow**: LLM autonomously chooses which tools to use
+
+---
+
+## **10. Implementation Plan**
+
+### **Phase 1: Setup** (15 min)
+1. Create manifest.json
+2. Basic HTML structure
+3. Claude API integration
+
+### **Phase 2: Tools** (30 min)
+4. Implement 5 tools with mock data
+5. Tool execution logic
+6. Test each tool individually
+
+### **Phase 3: Agent Logic** (30 min)
+7. Conversation history management
+8. Agent loop with tool calling
+9. Error handling
+
+### **Phase 4: UI** (30 min)
+10. Reasoning chain display
+11. Step-by-step updates
+12. Final result formatting
+
+### **Phase 5: Polish** (15 min)
+13. Styling
+14. Loading states
+15. Testing & debugging
+
+**Total: ~2 hours**
+
+---
+
+## **11. Success Criteria**
+
+The extension successfully demonstrates:
+1. ✅ User asks: "Prepare for my next meeting"
+2. ✅ Agent autonomously fetches calendar data
+3. ✅ Agent researches attendees and company
+4. ✅ Agent searches emails for context
+5. ✅ Agent calculates meeting statistics
+6. ✅ Agent synthesizes comprehensive brief
+7. ✅ UI shows all 5-7 reasoning steps
+8. ✅ Final brief is actionable and useful
