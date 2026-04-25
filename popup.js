@@ -4,10 +4,12 @@
 
 (function () {
   // ---------- DOM refs ----------
-  const apiKeyInput = document.getElementById("api-key");
-  const saveKeyBtn  = document.getElementById("save-key-btn");
-  const keyStatus   = document.getElementById("key-status");
-  const mcpStatus   = document.getElementById("mcp-status");
+  const apiKeyInput      = document.getElementById("api-key");
+  const saveKeyBtn       = document.getElementById("save-key-btn");
+  const keyStatus        = document.getElementById("key-status");
+  const mcpStatus        = document.getElementById("mcp-status");
+  const googleStatus     = document.getElementById("google-status");
+  const connectGoogleBtn = document.getElementById("connect-google-btn");
 
   const customQuery = document.getElementById("custom-query");
   const runBtn      = document.getElementById("run-btn");
@@ -45,13 +47,41 @@
     const ok = await checkMcpServer();
     if (ok) {
       showMcpStatus(`MCP server: connected (${MCP_SERVER_URL})`, "success");
+      await refreshGoogleStatus();
     } else {
       showMcpStatus(`MCP server: not reachable at ${MCP_SERVER_URL}. Start it with 'npm start' in mcp-server/.`, "error");
+      showGoogleStatus("", null);
+      connectGoogleBtn.classList.add("hidden");
     }
+  }
+
+  async function refreshGoogleStatus() {
+    showGoogleStatus("Checking Google Calendar...", null);
+    const status = await fetchGoogleOAuthStatus();
+    if (!status) {
+      showGoogleStatus("Google Calendar: status unavailable.", "error");
+      connectGoogleBtn.classList.add("hidden");
+      return;
+    }
+    if (!status.configured) {
+      showGoogleStatus("Google Calendar: not configured. See mcp-server/SETUP-GOOGLE.md.", "error");
+      connectGoogleBtn.classList.add("hidden");
+      return;
+    }
+    if (status.authenticated) {
+      showGoogleStatus("Google Calendar: connected.", "success");
+      connectGoogleBtn.classList.add("hidden");
+      return;
+    }
+    showGoogleStatus("Google Calendar: not connected.", "error");
+    connectGoogleBtn.classList.remove("hidden");
   }
 
   // ---------- Event wiring ----------
   saveKeyBtn.addEventListener("click", onSaveKey);
+  connectGoogleBtn.addEventListener("click", () => {
+    chrome.tabs.create({ url: googleOAuthStartUrl() });
+  });
   runBtn.addEventListener("click", () => onRun(customQuery.value.trim()));
   customQuery.addEventListener("keydown", e => {
     if (e.key === "Enter") onRun(customQuery.value.trim());
@@ -284,6 +314,11 @@
   function showMcpStatus(message, kind) {
     mcpStatus.textContent = message;
     mcpStatus.className = `hint ${kind || ""}`.trim();
+  }
+
+  function showGoogleStatus(message, kind) {
+    googleStatus.textContent = message;
+    googleStatus.className = `hint ${kind || ""}`.trim();
   }
 
   // ---------- Minimal Markdown renderer ----------

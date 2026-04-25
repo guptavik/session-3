@@ -1,87 +1,41 @@
-// Mock MCP server. Exposes 3 tools over a simple HTTP protocol:
-//   GET  /mcp/list_tools       -> { tools: [...] }
-//   POST /mcp/call_tool        -> { content: [{ type: "text", text: <JSON-string> }] }
+// Mock + live MCP server for the Meeting Intelligence extension.
 //
-// The Chrome extension acts as the MCP client: on each agent run it fetches
-// the tool list and merges it with its local tools when calling Claude.
+// Tools exposed:
+//   getUpcomingMeetings  -> LIVE Google Calendar (after OAuth) with mock fallback off by default
+//   searchGmail          -> mock (Gmail OAuth scope can be added later)
+//   searchWebInfo        -> mock
+//
+// HTTP protocol (matches the extension's MCP client):
+//   GET  /mcp/list_tools  -> { tools: [...] }
+//   POST /mcp/call_tool   -> { content: [{ type: "text", text: "<json>" }] }
+//
+// OAuth routes (Google Calendar):
+//   GET /oauth/start      -> 302 to Google consent
+//   GET /oauth/callback   -> exchanges code, persists tokens.json
+//   GET /oauth/status     -> { configured, authenticated, expires_at }
 
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+
+const PORT = parseInt(process.env.PORT || "3000", 10);
+const TOKENS_FILE = path.join(__dirname, "tokens.json");
+const REDIRECT_URI = `http://localhost:${PORT}/oauth/callback`;
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ---------- Mock data (anchored to "now" so the demo always has fresh meetings) ----------
+// ---------- Mock data (used by searchGmail / searchWebInfo) ----------
 
 const NOW = new Date();
-const inHours = h => {
-  const d = new Date(NOW);
-  d.setHours(d.getHours() + h, 0, 0, 0);
-  return d.toISOString();
-};
-const addMinutes = (iso, m) => {
-  const d = new Date(iso);
-  d.setMinutes(d.getMinutes() + m);
-  return d.toISOString();
-};
-
-const MOCK_MEETINGS = [
-  {
-    id: "mtg_001",
-    title: "Product Demo with Acme Corp",
-    startTime: inHours(2),
-    endTime: addMinutes(inHours(2), 60),
-    attendees: ["john.doe@acme.com", "jane.smith@acme.com"],
-    location: "Zoom",
-    description: "Discuss Q1 roadmap and Enterprise pricing tier."
-  },
-  {
-    id: "mtg_002",
-    title: "1:1 with Sarah",
-    startTime: inHours(5),
-    endTime: addMinutes(inHours(5), 30),
-    attendees: ["sarah.lee@ourcompany.com"],
-    location: "Office - Room 4B",
-    description: "Weekly sync."
-  },
-  {
-    id: "mtg_003",
-    title: "Vendor Review - Globex Logistics",
-    startTime: inHours(24),
-    endTime: addMinutes(inHours(24), 45),
-    attendees: ["mike.chen@globex.io", "procurement@ourcompany.com"],
-    location: "Google Meet",
-    description: "Review SLA performance and renewal terms for Globex contract."
-  },
-  {
-    id: "mtg_004",
-    title: "Engineering Planning",
-    startTime: inHours(28),
-    endTime: addMinutes(inHours(28), 90),
-    attendees: ["eng-leads@ourcompany.com"],
-    location: "Zoom",
-    description: "Q2 roadmap planning."
-  },
-  {
-    id: "mtg_005",
-    title: "Intro Call - Initech",
-    startTime: inHours(48),
-    endTime: addMinutes(inHours(48), 30),
-    attendees: ["bill.lumbergh@initech.com"],
-    location: "Zoom",
-    description: "Initial discovery call about workflow automation needs."
-  },
-  {
-    id: "mtg_006",
-    title: "Board Update Prep",
-    startTime: inHours(72),
-    endTime: addMinutes(inHours(72), 60),
-    attendees: ["ceo@ourcompany.com", "cfo@ourcompany.com"],
-    location: "Office - Boardroom",
-    description: "Prep for Friday board meeting."
-  }
-];
 
 const MOCK_EMAILS = [
   {
@@ -132,73 +86,151 @@ const MOCK_EMAILS = [
 ];
 
 const MOCK_PEOPLE = {
-  "john.doe@acme.com": {
-    name: "John Doe",
-    currentRole: "VP of Engineering",
-    company: "Acme Corp",
-    background: "10 years at Acme, previously Senior SWE at Google Cloud. Leads infra and platform teams.",
-    linkedInUrl: "https://linkedin.com/in/johndoe-acme"
-  },
-  "jane.smith@acme.com": {
-    name: "Jane Smith",
-    currentRole: "Director of Product",
-    company: "Acme Corp",
-    background: "Joined Acme 3 years ago from Stripe. Owns billing and growth product surface.",
-    linkedInUrl: "https://linkedin.com/in/janesmith-acme"
-  },
-  "mike.chen@globex.io": {
-    name: "Mike Chen",
-    currentRole: "Account Executive",
-    company: "Globex Logistics",
-    background: "Long-time AE at Globex, manages enterprise renewals.",
-    linkedInUrl: "https://linkedin.com/in/mikechen-globex"
-  },
-  "bill.lumbergh@initech.com": {
-    name: "Bill Lumbergh",
-    currentRole: "Director of Operations",
-    company: "Initech",
-    background: "20+ years at Initech. Owns internal tooling and process automation initiatives.",
-    linkedInUrl: "https://linkedin.com/in/blumbergh"
-  },
-  "sarah.lee@ourcompany.com": {
-    name: "Sarah Lee",
-    currentRole: "Engineering Manager",
-    company: "OurCompany",
-    background: "Internal — your direct report. Manages the platform team.",
-    linkedInUrl: null
-  }
+  "john.doe@acme.com":          { name: "John Doe",     currentRole: "VP of Engineering",  company: "Acme Corp",         background: "10 years at Acme, previously Senior SWE at Google Cloud.",            linkedInUrl: "https://linkedin.com/in/johndoe-acme" },
+  "jane.smith@acme.com":        { name: "Jane Smith",   currentRole: "Director of Product", company: "Acme Corp",         background: "Joined Acme 3 years ago from Stripe. Owns billing and growth product.", linkedInUrl: "https://linkedin.com/in/janesmith-acme" },
+  "mike.chen@globex.io":        { name: "Mike Chen",    currentRole: "Account Executive",   company: "Globex Logistics",  background: "Long-time AE at Globex, manages enterprise renewals.",                  linkedInUrl: "https://linkedin.com/in/mikechen-globex" },
+  "bill.lumbergh@initech.com":  { name: "Bill Lumbergh",currentRole: "Director of Operations", company: "Initech",        background: "20+ years at Initech. Owns internal tooling and process automation.",  linkedInUrl: "https://linkedin.com/in/blumbergh" },
+  "sarah.lee@ourcompany.com":   { name: "Sarah Lee",    currentRole: "Engineering Manager", company: "OurCompany",        background: "Internal — your direct report. Manages the platform team.",            linkedInUrl: null }
 };
 
 const MOCK_COMPANIES = {
-  "acme corp": {
-    title: "Acme Corp - Company Profile",
-    snippet: "B2B SaaS company, ~500 employees. Recently raised $50M Series C led by Sequoia. Known for workflow automation and a strong enterprise customer base.",
-    url: "https://acme.com/about",
-    linkedInCompanyUrl: "https://linkedin.com/company/acme-corp",
-    recentNews: [
-      "Acme raises $50M Series C (TechCrunch, last month)",
-      "Acme launches SSO/SAML for Enterprise tier (Acme blog, 2 weeks ago)"
-    ]
-  },
-  "globex logistics": {
-    title: "Globex Logistics - Company Profile",
-    snippet: "Mid-market logistics SaaS, ~200 employees. Focus on shipment tracking and SLA reporting. Q3 had reliability issues per industry reports.",
-    url: "https://globex.io/about",
-    linkedInCompanyUrl: "https://linkedin.com/company/globex-logistics",
-    recentNews: [
-      "Globex announces new datacenter in Frankfurt (Globex blog, last quarter)"
-    ]
-  },
-  "initech": {
-    title: "Initech - Company Profile",
-    snippet: "Mid-size enterprise (~1,200 employees) in financial services. Heavy on legacy mainframe systems, currently modernizing internal workflows.",
-    url: "https://initech.com/about",
-    linkedInCompanyUrl: "https://linkedin.com/company/initech",
-    recentNews: [
-      "Initech announces $5M digital transformation initiative (PR Newswire, 6 weeks ago)"
-    ]
-  }
+  "acme corp":        { title: "Acme Corp - Company Profile",        snippet: "B2B SaaS company, ~500 employees. Recently raised $50M Series C led by Sequoia.", url: "https://acme.com/about",   linkedInCompanyUrl: "https://linkedin.com/company/acme-corp",       recentNews: ["Acme raises $50M Series C (TechCrunch)", "Acme launches SSO/SAML for Enterprise tier"] },
+  "globex logistics": { title: "Globex Logistics - Company Profile", snippet: "Mid-market logistics SaaS, ~200 employees. Focus on shipment tracking and SLA reporting.", url: "https://globex.io/about",  linkedInCompanyUrl: "https://linkedin.com/company/globex-logistics", recentNews: ["Globex announces new datacenter in Frankfurt"] },
+  "initech":          { title: "Initech - Company Profile",          snippet: "Mid-size enterprise (~1,200 employees) in financial services.",                          url: "https://initech.com/about",linkedInCompanyUrl: "https://linkedin.com/company/initech",         recentNews: ["Initech announces $5M digital transformation initiative"] }
 };
+
+// ---------- Google OAuth state ----------
+
+let tokens = null; // { access_token, refresh_token, expires_at, scope, token_type }
+
+async function loadTokens() {
+  try {
+    const data = await fs.readFile(TOKENS_FILE, "utf-8");
+    tokens = JSON.parse(data);
+    console.log("Loaded Google tokens from disk.");
+  } catch {
+    tokens = null;
+  }
+}
+
+async function saveTokens(t) {
+  tokens = t;
+  await fs.writeFile(TOKENS_FILE, JSON.stringify(t, null, 2), { mode: 0o600 });
+}
+
+function isOauthConfigured() {
+  return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+}
+
+async function getValidAccessToken() {
+  if (!tokens || !tokens.access_token) return null;
+
+  // Refresh proactively if within 60s of expiry.
+  if (tokens.expires_at && Date.now() > tokens.expires_at - 60_000) {
+    if (!tokens.refresh_token) return null;
+    const r = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        refresh_token: tokens.refresh_token,
+        grant_type: "refresh_token"
+      })
+    });
+    if (!r.ok) {
+      const detail = await r.text();
+      console.error("Token refresh failed:", detail);
+      return null;
+    }
+    const refreshed = await r.json();
+    await saveTokens({
+      ...tokens,
+      access_token: refreshed.access_token,
+      expires_at: Date.now() + (refreshed.expires_in || 3600) * 1000
+    });
+  }
+  return tokens.access_token;
+}
+
+// ---------- OAuth routes ----------
+
+app.get("/oauth/start", (_req, res) => {
+  if (!isOauthConfigured()) {
+    return res.status(500).send(
+      "<h1>OAuth not configured</h1>" +
+      "<p>Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in <code>mcp-server/.env</code>, " +
+      "then restart the server. See <code>mcp-server/SETUP-GOOGLE.md</code>.</p>"
+    );
+  }
+  const url = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    response_type: "code",
+    scope: CALENDAR_SCOPE,
+    access_type: "offline",
+    prompt: "consent",
+    include_granted_scopes: "true"
+  });
+  res.redirect(url);
+});
+
+app.get("/oauth/callback", async (req, res) => {
+  const { code, error } = req.query;
+  if (error) {
+    return res.status(400).send(`<h1>OAuth error</h1><p>${error}</p>`);
+  }
+  if (!code) {
+    return res.status(400).send("<h1>Missing 'code' parameter</h1>");
+  }
+  if (!isOauthConfigured()) {
+    return res.status(500).send("<h1>OAuth not configured</h1>");
+  }
+
+  try {
+    const r = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: REDIRECT_URI,
+        grant_type: "authorization_code"
+      })
+    });
+
+    if (!r.ok) {
+      const detail = await r.text();
+      return res.status(500).send(`<h1>Token exchange failed</h1><pre>${detail}</pre>`);
+    }
+
+    const tok = await r.json();
+    await saveTokens({
+      access_token: tok.access_token,
+      refresh_token: tok.refresh_token || tokens?.refresh_token || null,
+      token_type: tok.token_type,
+      scope: tok.scope,
+      expires_at: Date.now() + (tok.expires_in || 3600) * 1000
+    });
+
+    res.send(
+      "<h1>Connected to Google Calendar</h1>" +
+      "<p>You can close this tab and return to the extension popup.</p>" +
+      "<p>If the popup doesn't show 'connected', reopen it (click the extension icon again).</p>"
+    );
+  } catch (err) {
+    res.status(500).send(`<h1>OAuth callback error</h1><pre>${err.message}</pre>`);
+  }
+});
+
+app.get("/oauth/status", (_req, res) => {
+  res.json({
+    configured: isOauthConfigured(),
+    authenticated: Boolean(tokens && tokens.access_token),
+    expires_at: tokens?.expires_at || null
+  });
+});
 
 // ---------- Tool definitions exposed to MCP clients ----------
 
@@ -206,8 +238,9 @@ const TOOL_DEFS = [
   {
     name: "getUpcomingMeetings",
     description:
-      "Fetches the user's upcoming meetings from their calendar within a time window. " +
-      "Use first when the user asks about meetings, schedule, or wants to prepare for upcoming events.",
+      "Fetches the user's REAL upcoming meetings from their Google Calendar within a time window. " +
+      "Use first when the user asks about meetings, schedule, or wants to prepare for upcoming events. " +
+      "Requires the MCP server to be authenticated with Google Calendar (OAuth).",
     inputSchema: {
       type: "object",
       properties: {
@@ -222,18 +255,12 @@ const TOOL_DEFS = [
     name: "searchGmail",
     description:
       "Searches the user's email for messages matching a free-text query. " +
-      "Use this to find prior context (threads, commitments, attachments) about a meeting, person, or company.",
+      "Currently returns mock data; will switch to live Gmail when Gmail OAuth scope is added.",
     inputSchema: {
       type: "object",
       properties: {
-        query: {
-          type: "string",
-          description: "Free-text keywords (e.g. company name, person name, project)."
-        },
-        maxResults: {
-          type: "number",
-          description: "Max number of email snippets to return. Default 5."
-        }
+        query: { type: "string", description: "Free-text keywords." },
+        maxResults: { type: "number", description: "Max results. Default 5." }
       },
       required: ["query"]
     }
@@ -241,17 +268,13 @@ const TOOL_DEFS = [
   {
     name: "searchWebInfo",
     description:
-      "Searches the web for information about a company or a person. " +
-      "Returns a profile (role, background, LinkedIn URL when available) for people, " +
-      "or a company snippet plus recent news for companies. " +
+      "Mock web lookup for a company or person. Returns a profile (role, background, LinkedIn URL when " +
+      "available) for people, or a company snippet plus recent news for companies. " +
       "LinkedIn data is preferred when available.",
     inputSchema: {
       type: "object",
       properties: {
-        query: {
-          type: "string",
-          description: "What to search for (company name, person name, or email)."
-        },
+        query: { type: "string", description: "Company name, person name, or email." },
         searchType: {
           type: "string",
           enum: ["company", "person", "general"],
@@ -265,15 +288,45 @@ const TOOL_DEFS = [
 
 // ---------- Tool implementations ----------
 
-function getUpcomingMeetings({ hoursAhead = 24 } = {}) {
+async function getUpcomingMeetings({ hoursAhead = 24 } = {}) {
+  const token = await getValidAccessToken();
+  if (!token) {
+    throw new Error(
+      "Google Calendar is not connected on the MCP server. " +
+      `Visit ${REDIRECT_URI.replace("/oauth/callback", "/oauth/start")} to authorize, then retry.`
+    );
+  }
+
   const now = new Date();
   const cutoff = new Date(now.getTime() + hoursAhead * 3600 * 1000);
-  return MOCK_MEETINGS
-    .filter(m => {
-      const start = new Date(m.startTime);
-      return start >= now && start <= cutoff;
-    })
-    .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+  const url = "https://www.googleapis.com/calendar/v3/calendars/primary/events?" + new URLSearchParams({
+    timeMin: now.toISOString(),
+    timeMax: cutoff.toISOString(),
+    singleEvents: "true",
+    orderBy: "startTime",
+    maxResults: "20"
+  });
+
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Google Calendar API ${r.status}: ${detail.slice(0, 500)}`);
+  }
+  const data = await r.json();
+
+  return (data.items || [])
+    .filter(ev => ev.start && (ev.start.dateTime || ev.start.date))
+    .map(ev => ({
+      id: ev.id,
+      title: ev.summary || "(no title)",
+      startTime: ev.start.dateTime || ev.start.date,
+      endTime: ev.end?.dateTime || ev.end?.date || ev.start.dateTime || ev.start.date,
+      attendees: (ev.attendees || []).map(a => a.email).filter(Boolean),
+      location: ev.location || "",
+      description: ev.description || "",
+      htmlLink: ev.htmlLink || null,
+      organizerEmail: ev.organizer?.email || null
+    }));
 }
 
 function searchGmail({ query, maxResults = 5 }) {
@@ -281,12 +334,13 @@ function searchGmail({ query, maxResults = 5 }) {
     throw new Error("searchGmail requires a non-empty string 'query'.");
   }
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return MOCK_EMAILS.map(e => {
-    const haystack = [e.subject, e.from, e.snippet, ...(e.keywords || [])]
-      .join(" ").toLowerCase();
-    const score = tokens.reduce((acc, t) => acc + (haystack.includes(t) ? 1 : 0), 0);
-    return { email: e, score };
-  })
+  return MOCK_EMAILS
+    .map(e => {
+      const haystack = [e.subject, e.from, e.snippet, ...(e.keywords || [])]
+        .join(" ").toLowerCase();
+      const score = tokens.reduce((acc, t) => acc + (haystack.includes(t) ? 1 : 0), 0);
+      return { email: e, score };
+    })
     .filter(s => s.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, maxResults)
@@ -312,9 +366,7 @@ function searchWebInfo({ query, searchType = "general" }) {
       }
     }
     return matches.map(c => ({
-      title: c.title,
-      snippet: c.snippet,
-      url: c.url,
+      title: c.title, snippet: c.snippet, url: c.url,
       linkedInUrl: c.linkedInCompanyUrl || null,
       source: c.linkedInCompanyUrl ? "linkedin" : "web",
       recentNews: c.recentNews || []
@@ -330,35 +382,24 @@ function searchWebInfo({ query, searchType = "general" }) {
     const [, p] = match;
     return [{
       title: `${p.name} - ${p.currentRole} at ${p.company}`,
-      name: p.name,
-      currentRole: p.currentRole,
-      company: p.company,
+      name: p.name, currentRole: p.currentRole, company: p.company,
       background: p.background,
-      url: p.linkedInUrl,
-      linkedInUrl: p.linkedInUrl,
+      url: p.linkedInUrl, linkedInUrl: p.linkedInUrl,
       source: p.linkedInUrl ? "linkedin" : "web",
       recentNews: []
     }];
   };
 
   let results = [];
-  if (searchType === "company") {
-    results = lookupCompany(query);
-  } else if (searchType === "person") {
-    results = lookupPerson(query);
-  } else {
-    // general: try both, prefer person hits
-    results = [...lookupPerson(query), ...lookupCompany(query)];
-  }
+  if (searchType === "company") results = lookupCompany(query);
+  else if (searchType === "person") results = lookupPerson(query);
+  else results = [...lookupPerson(query), ...lookupCompany(query)];
 
   if (!results.length) {
     return [{
       title: `${query} - no profile found`,
       snippet: `No information available for "${query}" in this mock dataset.`,
-      url: null,
-      linkedInUrl: null,
-      source: "none",
-      recentNews: []
+      url: null, linkedInUrl: null, source: "none", recentNews: []
     }];
   }
   return results;
@@ -370,7 +411,7 @@ app.get("/mcp/list_tools", (_req, res) => {
   res.json({ tools: TOOL_DEFS });
 });
 
-app.post("/mcp/call_tool", (req, res) => {
+app.post("/mcp/call_tool", async (req, res) => {
   const { name, arguments: args } = req.body || {};
   if (!name) {
     return res.status(400).json({
@@ -383,7 +424,7 @@ app.post("/mcp/call_tool", (req, res) => {
     let result;
     switch (name) {
       case "getUpcomingMeetings":
-        result = getUpcomingMeetings(args || {});
+        result = await getUpcomingMeetings(args || {});
         break;
       case "searchGmail":
         result = searchGmail(args || {});
@@ -397,9 +438,7 @@ app.post("/mcp/call_tool", (req, res) => {
           isError: true
         });
     }
-    res.json({
-      content: [{ type: "text", text: JSON.stringify(result) }]
-    });
+    res.json({ content: [{ type: "text", text: JSON.stringify(result) }] });
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     res.status(500).json({
@@ -411,8 +450,15 @@ app.post("/mcp/call_tool", (req, res) => {
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-const PORT = process.env.PORT || 3000;
+// ---------- Start ----------
+
+await loadTokens();
 app.listen(PORT, () => {
   console.log(`MCP server running on http://localhost:${PORT}`);
   console.log(`Tools: ${TOOL_DEFS.map(t => t.name).join(", ")}`);
+  console.log(`OAuth configured: ${isOauthConfigured()}`);
+  console.log(`Google authenticated: ${Boolean(tokens && tokens.access_token)}`);
+  if (isOauthConfigured() && !(tokens && tokens.access_token)) {
+    console.log(`To connect Google Calendar: open http://localhost:${PORT}/oauth/start in a browser.`);
+  }
 });

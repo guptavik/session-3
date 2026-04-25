@@ -140,6 +140,28 @@ button:disabled {
   min-height: 14px;
 }
 
+.google-row {
+  margin-top: 4px;
+}
+
+.google-row .hint {
+  flex: 1;
+  margin-top: 0;
+}
+
+#connect-google-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: #ffffff;
+  color: #cf222e;
+  border: 1px solid #cf222e;
+}
+
+#connect-google-btn:hover:not(:disabled) {
+  background: #ffebe9;
+  border-color: #cf222e;
+}
+
 .hint.success {
   color: #1a7f37;
 }

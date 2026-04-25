@@ -17,6 +17,21 @@ async function checkMcpServer() {
   }
 }
 
+// Returns { configured, authenticated, expires_at } or null if the server is unreachable.
+async function fetchGoogleOAuthStatus() {
+  try {
+    const r = await fetch(`${MCP_SERVER_URL}/oauth/status`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+function googleOAuthStartUrl() {
+  return `${MCP_SERVER_URL}/oauth/start`;
+}
+
 async function fetchMcpTools() {
   const r = await fetch(`${MCP_SERVER_URL}/mcp/list_tools`);
   if (!r.ok) {
