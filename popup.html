@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Meeting Intelligence Agent</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Meeting Intelligence Agent</h1>
+    </header>
+
+    <section class="api-key-section">
+      <label for="api-key">Anthropic API Key</label>
+      <div class="row">
+        <input
+          type="password"
+          id="api-key"
+          placeholder="sk-ant-..."
+          autocomplete="off"
+          spellcheck="false">
+        <button id="save-key-btn" type="button">Save</button>
+      </div>
+      <div id="key-status" class="hint"></div>
+      <div id="mcp-status" class="hint"></div>
+    </section>
+
+    <section class="query-section">
+      <label>What would you like help with?</label>
+      <div class="quick-actions">
+        <button class="quick-btn" data-query="Prepare me for my next meeting" type="button">
+          Prepare for next meeting
+        </button>
+        <button class="quick-btn" data-query="Show me all meetings today and research the attendees" type="button">
+          Show all meetings today
+        </button>
+        <button class="quick-btn" data-query="What's my meeting load this week?" type="button">
+          Calculate meeting stats
+        </button>
+      </div>
+      <div class="row">
+        <input
+          type="text"
+          id="custom-query"
+          placeholder="Or type a custom query..."
+          autocomplete="off">
+        <button id="run-btn" type="button">Go</button>
+      </div>
+    </section>
+
+    <section id="reasoning-section" class="reasoning-section hidden">
+      <h2>Agent Reasoning Chain</h2>
+      <div id="steps"></div>
+    </section>
+
+    <section id="brief-section" class="brief-section hidden">
+      <h2>Meeting Brief</h2>
+      <div id="brief" class="brief"></div>
+    </section>
+
+    <section id="error-section" class="error-section hidden">
+      <h2>Error</h2>
+      <div id="error" class="error"></div>
+    </section>
+  </div>
+
+  <script src="tools.js"></script>
+  <script src="mcpClient.js"></script>
+  <script src="api.js"></script>
+  <script src="agent.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
