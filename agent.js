@@ -1,13 +1,13 @@
-// Manual agent loop. Calls Claude, executes any tool_use blocks,
-// feeds results back, and stops when Claude returns end_turn or
+// Manual agent loop. Calls the LLM, executes any tool_use blocks,
+// feeds results back, and stops when the model returns end_turn or
 // the safety cap is hit.
 //
 // Callbacks let the UI render the reasoning chain live:
 //   onStep(step)        -> called once when a tool starts (status: "loading")
 //                       -> called again with status "retrying" if first attempt fails
 //                       -> called once with "success" | "error" + result
-//   onAssistantText(s)  -> any text Claude emits between tool calls
-//   onFinalText(s)      -> Claude's final user-facing message
+//   onAssistantText(s)  -> any text the model emits between tool calls
+//   onFinalText(s)      -> the model's final user-facing message
 //   onError(err)        -> fatal error (network, auth, unknown tool, etc.)
 
 const MAX_ITERATIONS = 10;
@@ -46,7 +46,7 @@ async function runAgent(userQuery, callbacks = {}) {
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       const response = await callLLM(conversationHistory, TOOLS);
 
-      // Surface any text content Claude produced this turn.
+      // Surface any text content the model produced this turn.
       const textBlocks = response.content.filter(b => b.type === "text");
       for (const tb of textBlocks) {
         if (tb.text && tb.text.trim()) onAssistantText(tb.text);
@@ -113,7 +113,7 @@ async function runAgent(userQuery, callbacks = {}) {
             firstError: outcome.firstError,
             retried: true
           });
-          // Return the error to Claude as a tool_result so it can adapt
+          // Return the error to the model as a tool_result so it can adapt
           // (try a different query, skip the step, etc.) rather than aborting.
           toolResults.push({
             type: "tool_result",

@@ -346,9 +346,10 @@ User sees: Step-by-step reasoning + final brief
 - LocalStorage for API key persistence
 
 ### **Backend/API**
-- Anthropic Claude API (Sonnet 4)
-- Tool calling via function definitions
+- Google Gemini Generative Language API (`gemini-2.5-flash`)
+- Tool calling via function declarations
 - Conversation history management
+- Provider-agnostic agent loop: `api.js` translates Anthropic-style messages (text / tool_use / tool_result blocks) to Gemini's `contents` / `parts` / `functionCall` / `functionResponse` shape at the API boundary, so swapping providers is a single-file change
 
 ### **External APIs**
 - Mock Calendar Data (hardcoded JSON)
@@ -366,7 +367,7 @@ meeting-intelligence-agent/
 ├── popup.js                # UI logic & event handlers
 ├── agent.js                # Core agent logic
 ├── tools.js                # Tool definitions & implementations
-├── api.js                  # Claude API wrapper
+├── api.js                  # Gemini API wrapper + Anthropic↔Gemini translation
 ├── styles.css              # Styling
 ├── mockData.js             # Mock calendar/email data
 └── icons/
@@ -418,10 +419,10 @@ async function runAgent(userQuery, apiKey) {
   let stepNumber = 1;
   
   while (agentRunning) {
-    // Call Claude with full history + tools
-    const response = await callClaude(conversationHistory, TOOLS, apiKey);
+    // Call the LLM with full history + tools
+    const response = await callLLM(conversationHistory, TOOLS, apiKey);
     
-    // Check if Claude wants to use a tool
+    // Check if the model wants to use a tool
     if (response.stop_reason === "tool_use") {
       for (const contentBlock of response.content) {
         if (contentBlock.type === "tool_use") {
@@ -465,7 +466,7 @@ async function runAgent(userQuery, apiKey) {
 
 ## **9. Assignment Compliance Checklist**
 
-- ✅ **Multi-step LLM calls**: Agent calls Claude 5-7 times
+- ✅ **Multi-step LLM calls**: Agent calls the LLM 5-7 times
 - ✅ **Full conversation history**: Each call includes ALL previous messages + tool results
 - ✅ **External tool calls**: Calendar, Gmail, Web Search APIs
 - ✅ **Visible reasoning chain**: UI displays every step with inputs/outputs
@@ -480,7 +481,7 @@ async function runAgent(userQuery, apiKey) {
 ### **Phase 1: Setup** (15 min)
 1. Create manifest.json
 2. Basic HTML structure
-3. Claude API integration
+3. Gemini API integration
 
 ### **Phase 2: Tools** (30 min)
 4. Implement 5 tools with mock data

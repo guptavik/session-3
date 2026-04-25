@@ -1,4 +1,4 @@
-// Tool definitions (JSON schemas Claude sees) and implementations.
+// Tool definitions (JSON schemas the LLM sees) and implementations.
 // Implementations read from mockData.js (loaded as a script in popup.html).
 
 const TOOLS = [

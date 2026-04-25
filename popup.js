@@ -110,7 +110,7 @@
       return;
     }
     if (!apiKeyInput.value.trim()) {
-      showError("Save your Anthropic API key first.");
+      showError("Save your Gemini API key first.");
       return;
     }
 
@@ -498,7 +498,7 @@
   }
 
   function handleAssistantText(text) {
-    // Reasoning prose Claude emits between tool calls. Rendered as a
+    // Reasoning prose the model emits between tool calls. Rendered as a
     // collapsible "thought" — header always visible, body hidden by default.
     const node = document.createElement("div");
     node.className = "assistant-text collapsed";
