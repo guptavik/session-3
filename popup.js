@@ -18,6 +18,7 @@
   const reasoningSection = document.getElementById("reasoning-section");
   const reasoningToggle  = document.getElementById("reasoning-toggle");
   const reasoningMeta    = document.getElementById("reasoning-meta");
+  const copyBtn          = document.getElementById("copy-btn");
   const stepsContainer   = document.getElementById("steps");
 
   const briefSection = document.getElementById("brief-section");
@@ -29,6 +30,10 @@
   // Track step DOM nodes by stepId so we can update them in place.
   const stepNodes = new Map();
   let running = false;
+
+  // Snapshot of the current run, used by the Copy button to serialize
+  // query + reasoning chain + final brief as markdown.
+  let runHistory = null;
 
   // ---------- Init: load saved key ----------
   (async function init() {
@@ -66,6 +71,10 @@
       e.preventDefault();
       reasoningSection.classList.toggle("collapsed");
     }
+  });
+  copyBtn.addEventListener("click", e => {
+    e.stopPropagation();   // don't also toggle the section
+    onCopy();
   });
   gearBtn.addEventListener("click", e => {
     e.stopPropagation();
@@ -115,6 +124,12 @@
     }
 
     resetOutput();
+    runHistory = {
+      query,
+      timestamp: new Date().toISOString(),
+      steps: [],
+      finalText: ""
+    };
     setRunning(true);
     reasoningSection.classList.remove("hidden");
 
@@ -143,6 +158,16 @@
     }
     updateStepNode(node, step);
     node.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    // Mirror the step into runHistory so Copy can serialize the run.
+    if (runHistory) {
+      let tracked = runHistory.steps.find(s => s.stepId === step.stepId);
+      if (!tracked) {
+        tracked = { stepId: step.stepId };
+        runHistory.steps.push(tracked);
+      }
+      Object.assign(tracked, step);
+    }
   }
 
   function createStepNode(step) {
@@ -532,6 +557,7 @@
     briefSection.classList.remove("hidden");
     briefEl.innerHTML = renderMarkdown(text);
     postProcessBrief(briefEl);
+    if (runHistory) runHistory.finalText = text;
   }
 
   // ---------- Brief post-processing ----------
@@ -774,6 +800,90 @@
   function toggleSettings() {
     if (apiKeySection.classList.contains("hidden")) openSettings();
     else closeSettings();
+  }
+
+  // ---------- Copy full run ----------
+  async function onCopy() {
+    const text = buildCopyText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopyButton("Copied", "copied");
+    } catch (err) {
+      flashCopyButton("Copy failed", "error");
+      console.error("Copy failed:", err);
+    }
+  }
+
+  function flashCopyButton(label, cls) {
+    const original = copyBtn.textContent;
+    const originalCls = copyBtn.className;
+    copyBtn.textContent = label;
+    copyBtn.classList.add(cls);
+    setTimeout(() => {
+      copyBtn.textContent = original;
+      copyBtn.className = originalCls;
+    }, 1800);
+  }
+
+  function buildCopyText() {
+    if (!runHistory) return "";
+    const lines = [];
+    lines.push("# Meeting Intelligence Agent — Run Output");
+    lines.push("");
+    lines.push(`**Query:** ${runHistory.query}`);
+    lines.push(`**Time:** ${runHistory.timestamp}`);
+    lines.push("");
+
+    if (runHistory.steps.length) {
+      lines.push("## Reasoning Chain");
+      lines.push("");
+      for (const step of runHistory.steps) {
+        const icon = stepIconForCopy(step.status);
+        const retryNote = step.retried ? " _(recovered after retry)_" : "";
+        lines.push(`### Step ${step.stepId}: \`${step.toolName}\` ${icon}${retryNote}`);
+        lines.push("");
+        lines.push("**Input:**");
+        lines.push("```json");
+        lines.push(JSON.stringify(step.toolInput || {}, null, 2));
+        lines.push("```");
+        lines.push("");
+        if (step.status === "success") {
+          lines.push("**Result:**");
+          lines.push("```json");
+          lines.push(JSON.stringify(step.result, null, 2));
+          lines.push("```");
+        } else if (step.status === "error") {
+          lines.push(`**Error:** ${step.error || "(unknown)"}`);
+          if (step.firstError && step.firstError !== step.error) {
+            lines.push(`First attempt: ${step.firstError}`);
+          }
+        } else {
+          lines.push(`_Status: ${step.status}_`);
+        }
+        lines.push("");
+      }
+    }
+
+    if (runHistory.finalText) {
+      lines.push("---");
+      lines.push("");
+      lines.push("## Final Brief");
+      lines.push("");
+      lines.push(runHistory.finalText);
+    }
+
+    return lines.join("\n").trim() + "\n";
+  }
+
+  function stepIconForCopy(status) {
+    switch (status) {
+      case "success":  return "✓";
+      case "error":    return "✗";
+      case "retrying": return "↻";
+      case "loading":  return "…";
+      default:         return "•";
+    }
   }
 
   // ---------- Minimal Markdown renderer ----------
