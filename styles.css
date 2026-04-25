@@ -508,6 +508,193 @@ pre {
   font-style: italic;
 }
 
+/* ---- Weekly load chart ---- */
+
+.load-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.load-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.load-row--free {
+  opacity: 0.55;
+}
+
+.load-label {
+  width: 32px;
+  font-weight: 600;
+  color: #57606a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.load-bar {
+  flex: 1;
+  height: 14px;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.load-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.load-fill--free   { background: transparent; }
+.load-fill--light  { background: linear-gradient(90deg, #2da44e 0%, #4ac26b 100%); }
+.load-fill--medium { background: linear-gradient(90deg, #d4a72c 0%, #f1c557 100%); }
+.load-fill--heavy  { background: linear-gradient(90deg, #fb8500 0%, #ffa940 100%); }
+.load-fill--packed { background: linear-gradient(90deg, #cf222e 0%, #f85149 100%); }
+
+.load-value {
+  width: 50px;
+  text-align: right;
+  font-weight: 600;
+  color: #1f2328;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.load-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 50px;
+  text-align: center;
+}
+
+.load-badge--free   { background: #f6f8fa; color: #57606a; border: 1px solid #d0d7de; }
+.load-badge--light  { background: #dafbe1; color: #116329; border: 1px solid #aceebb; }
+.load-badge--medium { background: #fff8c5; color: #7d4e00; border: 1px solid #f1c557; }
+.load-badge--heavy  { background: #fff1e5; color: #9a3412; border: 1px solid #ffa940; }
+.load-badge--packed { background: #ffebe9; color: #82071e; border: 1px solid #ffabaa; }
+
+/* ---- Day-by-day breakdown ---- */
+
+.day-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.day-block {
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.day-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  background: #f6f8fa;
+}
+
+.day-header:hover {
+  background: #eaeef2;
+}
+
+.day-block.collapsed .day-header {
+  background: #ffffff;
+}
+
+.day-block.collapsed .day-header:hover {
+  background: #f6f8fa;
+}
+
+.day-name {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  color: #1f2328;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.day-summary {
+  font-size: 10px;
+  color: #57606a;
+  font-variant-numeric: tabular-nums;
+}
+
+.day-chevron {
+  font-size: 10px;
+  color: #57606a;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.day-block.collapsed .day-chevron {
+  transform: rotate(-90deg);
+}
+
+.day-body {
+  padding: 6px 10px 8px;
+  border-top: 1px solid #d0d7de;
+  background: #fdfcfb;
+}
+
+.day-block.collapsed .day-body {
+  display: none;
+}
+
+.day-meetings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.day-meeting {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+
+.day-meeting-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #ea4335;
+  white-space: nowrap;
+}
+
+.day-meeting-title {
+  color: #1f2328;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-meeting-loc {
+  grid-column: 2;
+  font-size: 10px;
+  color: #57606a;
+  font-style: italic;
+}
+
 .assistant-text {
   background: #f6f8fa;
   border: 1px solid #d0d7de;
@@ -699,6 +886,47 @@ pre {
 .brief em {
   font-style: italic;
   color: #57606a;
+}
+
+.brief table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 8px 0;
+  font-size: 11px;
+  background: #ffffff;
+  border: 1px solid #e5d8d6;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.brief th,
+.brief td {
+  padding: 5px 8px;
+  text-align: left;
+  border-bottom: 1px solid #f0d9d6;
+  vertical-align: top;
+}
+
+.brief tr:last-child td {
+  border-bottom: none;
+}
+
+.brief th {
+  background: #fdf6f5;
+  font-weight: 700;
+  color: #ea4335;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.brief tbody tr:nth-child(even) td {
+  background: #fdfcfb;
+}
+
+.brief td {
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Brief: multi-meeting collapsible cards ---- */

@@ -44,7 +44,7 @@ async function runAgent(userQuery, callbacks = {}) {
 
   try {
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-      const response = await callClaude(conversationHistory, TOOLS);
+      const response = await callLLM(conversationHistory, TOOLS);
 
       // Surface any text content Claude produced this turn.
       const textBlocks = response.content.filter(b => b.type === "text");

@@ -33,9 +33,9 @@
   // ---------- Init: load saved key ----------
   (async function init() {
     try {
-      const { anthropicApiKey } = await chrome.storage.local.get("anthropicApiKey");
-      if (anthropicApiKey) {
-        apiKeyInput.value = anthropicApiKey;
+      const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
+      if (geminiApiKey) {
+        apiKeyInput.value = geminiApiKey;
         showKeyStatus("Key loaded from storage.", "success");
         setKeyStatusIndicator("saved");
       } else {
@@ -303,47 +303,78 @@
     }
     wrapper.appendChild(grid);
 
-    // Day distribution bar chart (calendar order, only days with meetings)
-    const dist = stats.meetingDistribution || {};
+    // Weekly load chart (hours per day, color-coded by load classification).
+    // Show all weekdays even when free; show weekends only if they have meetings.
     const dayOrder = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-    const present = dayOrder.filter(d => dist[d] > 0);
-    if (present.length) {
+    const hoursByDay = stats.hoursByDay || {};
+    const loadByDay  = stats.loadByDay  || {};
+    const meetingsByDay = stats.meetingsByDay || {};
+
+    const visibleDays = dayOrder.filter(d => {
+      if (d === "Saturday" || d === "Sunday") return (hoursByDay[d] || 0) > 0;
+      return true;
+    });
+
+    if (visibleDays.length) {
       const heading = document.createElement("div");
       heading.className = "stats-chart-label";
-      heading.textContent = "Distribution by Day";
+      heading.textContent = "Weekly Load";
       wrapper.appendChild(heading);
 
       const chart = document.createElement("div");
-      chart.className = "bar-chart";
-      const max = Math.max(...present.map(d => dist[d]));
-      for (const day of present) {
-        const count = dist[day];
-        const pct = max > 0 ? (count / max) * 100 : 0;
+      chart.className = "load-chart";
+      const maxHours = Math.max(...visibleDays.map(d => hoursByDay[d] || 0), 1);
+
+      for (const day of visibleDays) {
+        const hours = hoursByDay[day] || 0;
+        const load  = loadByDay[day] || "free";
+        const pct   = (hours / maxHours) * 100;
 
         const row = document.createElement("div");
-        row.className = "bar-row";
+        row.className = `load-row load-row--${load}`;
 
         const label = document.createElement("span");
-        label.className = "bar-label";
+        label.className = "load-label";
         label.textContent = day.slice(0, 3);
 
         const bar = document.createElement("div");
-        bar.className = "bar";
+        bar.className = "load-bar";
         const fill = document.createElement("div");
-        fill.className = "bar-fill";
+        fill.className = `load-fill load-fill--${load}`;
         fill.style.width = `${pct.toFixed(1)}%`;
         bar.appendChild(fill);
 
         const value = document.createElement("span");
-        value.className = "bar-value";
-        value.textContent = String(count);
+        value.className = "load-value";
+        value.textContent = hours > 0 ? formatHours(hours) : "—";
+
+        const badge = document.createElement("span");
+        badge.className = `load-badge load-badge--${load}`;
+        badge.textContent = load;
 
         row.appendChild(label);
         row.appendChild(bar);
         row.appendChild(value);
+        row.appendChild(badge);
         chart.appendChild(row);
       }
       wrapper.appendChild(chart);
+    }
+
+    // Day-by-day breakdown — collapsible per day, listing each meeting.
+    const daysWithMeetings = dayOrder.filter(d => (meetingsByDay[d] || []).length > 0);
+    if (daysWithMeetings.length) {
+      const heading = document.createElement("div");
+      heading.className = "stats-chart-label";
+      heading.textContent = "Day-by-Day Breakdown";
+      wrapper.appendChild(heading);
+
+      const breakdown = document.createElement("div");
+      breakdown.className = "day-breakdown";
+      for (const day of daysWithMeetings) {
+        breakdown.appendChild(buildDayBlock(day, meetingsByDay[day], hoursByDay[day] || 0));
+      }
+      wrapper.appendChild(breakdown);
     }
 
     if (stats.timeframe && stats.timeframe !== "n/a") {
@@ -354,6 +385,93 @@
     }
 
     return wrapper;
+  }
+
+  function buildDayBlock(day, meetings, hours) {
+    const block = document.createElement("div");
+    block.className = "day-block collapsed";
+
+    const header = document.createElement("div");
+    header.className = "day-header";
+    header.setAttribute("role", "button");
+    header.setAttribute("tabindex", "0");
+
+    const name = document.createElement("span");
+    name.className = "day-name";
+    name.textContent = day;
+
+    const summary = document.createElement("span");
+    summary.className = "day-summary";
+    summary.textContent =
+      `${meetings.length} meeting${meetings.length === 1 ? "" : "s"} · ${formatHours(hours)}`;
+
+    const chevron = document.createElement("span");
+    chevron.className = "day-chevron";
+    chevron.textContent = "▾";
+
+    header.appendChild(name);
+    header.appendChild(summary);
+    header.appendChild(chevron);
+
+    const body = document.createElement("div");
+    body.className = "day-body";
+    const list = document.createElement("ul");
+    list.className = "day-meetings";
+    for (const m of meetings) {
+      const li = document.createElement("li");
+      li.className = "day-meeting";
+
+      const time = document.createElement("span");
+      time.className = "day-meeting-time";
+      time.textContent = formatTimeRange(m.startTime, m.durationMinutes);
+
+      const title = document.createElement("span");
+      title.className = "day-meeting-title";
+      title.textContent = m.title;
+
+      li.appendChild(time);
+      li.appendChild(title);
+
+      if (m.location) {
+        const loc = document.createElement("span");
+        loc.className = "day-meeting-loc";
+        loc.textContent = m.location;
+        li.appendChild(loc);
+      }
+
+      list.appendChild(li);
+    }
+    body.appendChild(list);
+
+    block.appendChild(header);
+    block.appendChild(body);
+
+    const toggle = () => block.classList.toggle("collapsed");
+    header.addEventListener("click", toggle);
+    header.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle();
+      }
+    });
+
+    return block;
+  }
+
+  function formatHours(h) {
+    if (!h) return "0 hr";
+    const rounded = +h.toFixed(2);
+    return `${rounded} hr${rounded === 1 ? "" : "s"}`;
+  }
+
+  function formatTimeRange(startIso, durationMinutes) {
+    try {
+      const start = new Date(startIso);
+      const time = start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      return `${time} · ${durationMinutes}m`;
+    } catch {
+      return `${durationMinutes}m`;
+    }
   }
 
   function makeSection(label, content, isError) {
@@ -681,6 +799,25 @@
         continue;
       }
 
+      // Table block: header row + separator row + data rows
+      // Header:    | col | col |
+      // Separator: |---|---| (with optional :---: alignment markers)
+      // Data rows: | val | val |
+      if (/^\s*\|.*\|\s*$/.test(line)) {
+        const sep = lines[i + 1];
+        if (sep && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(sep)) {
+          const headers = parseTableRow(line);
+          i += 2;
+          const rows = [];
+          while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+            rows.push(parseTableRow(lines[i]));
+            i++;
+          }
+          out.push(renderTable(headers, rows));
+          continue;
+        }
+      }
+
       // List block (handles bullets and checklists together)
       if (/^\s*-\s+/.test(line)) {
         const items = [];
@@ -709,15 +846,32 @@
         i < lines.length &&
         lines[i].trim() &&
         !/^(#{1,3})\s+/.test(lines[i]) &&
-        !/^\s*-\s+/.test(lines[i])
+        !/^\s*-\s+/.test(lines[i]) &&
+        !/^\s*\|.*\|\s*$/.test(lines[i])
       ) {
         buf.push(lines[i]);
         i++;
       }
-      out.push(`<p>${inline(buf.join(" "))}</p>`);
+      if (buf.length) out.push(`<p>${inline(buf.join(" "))}</p>`);
     }
 
     return out.join("\n");
+  }
+
+  function parseTableRow(line) {
+    return line.trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map(c => c.trim());
+  }
+
+  function renderTable(headers, rows) {
+    const head = headers.map(h => `<th>${inline(h)}</th>`).join("");
+    const body = rows
+      .map(r => "<tr>" + r.map(c => `<td>${inline(c)}</td>`).join("") + "</tr>")
+      .join("");
+    return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
   }
 
   function inline(text) {

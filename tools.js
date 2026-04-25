@@ -223,6 +223,58 @@ function calculateMeetingStats({ meetings, timeframe }) {
   if (!Array.isArray(meetings)) {
     throw new Error("calculateMeetingStats requires 'meetings' to be an array.");
   }
+
+  const days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+  // Initialize per-day buckets with zero-valued entries for ALL days, so the
+  // renderer can show free days (Mon-Fri) alongside busy ones.
+  const distribution = {};
+  const hoursByDay = {};
+  const meetingsByDay = {};
+  for (const d of days) {
+    distribution[d]  = 0;
+    hoursByDay[d]    = 0;
+    meetingsByDay[d] = [];
+  }
+
+  let totalMs = 0;
+  for (const m of meetings) {
+    const start = new Date(m.startTime);
+    const end   = new Date(m.endTime);
+    const durMs = end - start;
+    if (!Number.isFinite(durMs) || durMs <= 0) continue;
+
+    totalMs += durMs;
+    const day = days[start.getDay()];
+    distribution[day]++;
+    hoursByDay[day] += durMs / 3600000;
+    meetingsByDay[day].push({
+      id: m.id,
+      title: m.title,
+      startTime: m.startTime,
+      endTime: m.endTime,
+      durationMinutes: Math.round(durMs / 60000),
+      location: m.location || null
+    });
+  }
+
+  // Round per-day hours and sort meetings within each day chronologically.
+  for (const d of days) {
+    hoursByDay[d] = +hoursByDay[d].toFixed(2);
+    meetingsByDay[d].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+  }
+
+  // Categorize each day's load. Thresholds calibrated against an 8-hour workday.
+  const loadByDay = {};
+  for (const d of days) {
+    const h = hoursByDay[d];
+    if (h === 0)      loadByDay[d] = "free";
+    else if (h <= 1.5) loadByDay[d] = "light";
+    else if (h <= 3)   loadByDay[d] = "medium";
+    else if (h <= 5)   loadByDay[d] = "heavy";
+    else               loadByDay[d] = "packed";
+  }
+
   if (meetings.length === 0) {
     return {
       timeframe: timeframe || "n/a",
@@ -230,30 +282,27 @@ function calculateMeetingStats({ meetings, timeframe }) {
       totalHours: 0,
       averageDurationHours: 0,
       busiestDay: null,
-      meetingDistribution: {}
+      meetingDistribution: distribution,
+      hoursByDay,
+      loadByDay,
+      meetingsByDay
     };
   }
-  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const dist = {};
-  let totalMs = 0;
-  for (const m of meetings) {
-    const start = new Date(m.startTime);
-    const end = new Date(m.endTime);
-    const dur = end - start;
-    if (Number.isFinite(dur) && dur > 0) totalMs += dur;
-    const day = days[start.getDay()];
-    dist[day] = (dist[day] || 0) + 1;
-  }
+
   const totalHours = +(totalMs / 3600000).toFixed(2);
   const averageDurationHours = +(totalHours / meetings.length).toFixed(2);
-  const busiestDay = Object.entries(dist).sort((a, b) => b[1] - a[1])[0][0];
+  const busiestDay = Object.entries(distribution).sort((a, b) => b[1] - a[1])[0][0];
+
   return {
     timeframe: timeframe || "n/a",
     totalMeetings: meetings.length,
     totalHours,
     averageDurationHours,
     busiestDay,
-    meetingDistribution: dist
+    meetingDistribution: distribution,
+    hoursByDay,
+    loadByDay,
+    meetingsByDay
   };
 }
 

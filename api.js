@@ -1,14 +1,16 @@
-// Thin wrapper around the Anthropic Messages API for Chrome extensions.
-// Calls api.anthropic.com directly from the browser using the
-// `anthropic-dangerous-direct-browser-access` header.
+// Thin wrapper around Google's Gemini REST API for Chrome extensions.
 //
-// SECURITY: the user's API key lives in chrome.storage.local on their machine.
-// Anyone with access to the extension's storage can read it. This is acceptable
-// for a single-user demo extension; do not ship to multiple users without a proxy.
+// Gemini's request/response shape differs from Anthropic's. Internally,
+// agent.js still operates on Anthropic-style messages (role + content
+// blocks of type text / tool_use / tool_result). This file translates
+// at the API boundary so agent.js doesn't need to change.
+//
+// SECURITY: the user's API key lives in chrome.storage.local on their
+// machine. Anyone with extension storage access can read it. Acceptable
+// for a single-user demo; do not ship to multiple users without a proxy.
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION = "2023-06-01";
+const GEMINI_MODEL   = "gemini-2.5-flash";
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const SYSTEM_PROMPT = `You are a Meeting Intelligence Agent.
 
@@ -55,43 +57,43 @@ Keep the brief tight. Only include sections where you actually have content. Cit
 
 If briefing on multiple meetings (e.g. "show me everything today"), write a one-line intro, then repeat the structure above for each meeting — each one MUST start with its own \`# <Meeting Title>\` heading (single hash). Do not number the meeting titles. The UI groups everything under one \`#\` heading into a single collapsible card per meeting.`;
 
-const MAX_TOKENS = 4096;
+const MAX_OUTPUT_TOKENS = 4096;
 
 async function getApiKey() {
   if (typeof chrome === "undefined" || !chrome.storage) {
     throw new Error("chrome.storage is not available. Run inside the extension.");
   }
-  const { anthropicApiKey } = await chrome.storage.local.get("anthropicApiKey");
-  if (!anthropicApiKey) {
-    throw new Error("No API key set. Save your Anthropic API key first.");
+  const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
+  if (!geminiApiKey) {
+    throw new Error("No API key set. Save your Gemini API key first.");
   }
-  return anthropicApiKey;
+  return geminiApiKey;
 }
 
 async function setApiKey(key) {
   if (typeof chrome === "undefined" || !chrome.storage) {
     throw new Error("chrome.storage is not available.");
   }
-  await chrome.storage.local.set({ anthropicApiKey: key });
+  await chrome.storage.local.set({ geminiApiKey: key });
 }
 
-async function callClaude(messages, tools, apiKey) {
+async function callLLM(messages, tools, apiKey) {
   const key = apiKey || await getApiKey();
+
   const body = {
-    model: ANTHROPIC_MODEL,
-    max_tokens: MAX_TOKENS,
-    system: SYSTEM_PROMPT,
-    tools,
-    messages
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents: convertMessagesToContents(messages),
+    tools: convertToolsToFunctionDeclarations(tools),
+    generationConfig: {
+      maxOutputTokens: MAX_OUTPUT_TOKENS
+    }
   };
 
-  const res = await fetch(ANTHROPIC_API_URL, {
+  const res = await fetch(GEMINI_API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "anthropic-dangerous-direct-browser-access": "true"
+      "x-goog-api-key": key
     },
     body: JSON.stringify(body)
   });
@@ -104,12 +106,134 @@ async function callClaude(messages, tools, apiKey) {
     } catch {
       detail = await res.text();
     }
-    throw new Error(`Claude API error ${res.status}: ${detail}`);
+    throw new Error(`Gemini API error ${res.status}: ${detail}`);
   }
 
-  return res.json();
+  return convertGeminiResponseToAnthropicShape(await res.json());
+}
+
+// ---------- Format conversion ----------
+
+// Convert Anthropic-style messages array to Gemini's contents array.
+// Anthropic role "assistant" → Gemini role "model".
+function convertMessagesToContents(messages) {
+  // Pre-scan to build a tool_use_id → name map so tool_result blocks
+  // (which only carry an id) can be converted to functionResponse parts
+  // (which require the function name).
+  const idToName = new Map();
+  for (const msg of messages) {
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === "tool_use") {
+          idToName.set(block.id, block.name);
+        }
+      }
+    }
+  }
+
+  return messages.map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: convertContentToParts(m.content, idToName)
+  }));
+}
+
+function convertContentToParts(content, idToName) {
+  if (typeof content === "string") {
+    return content.trim() ? [{ text: content }] : [{ text: " " }];
+  }
+
+  const parts = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      if (block.text) parts.push({ text: block.text });
+    } else if (block.type === "tool_use") {
+      parts.push({
+        functionCall: {
+          name: block.name,
+          args: block.input || {}
+        }
+      });
+    } else if (block.type === "tool_result") {
+      const name = idToName.get(block.tool_use_id) || "unknown_function";
+      let response = block.content;
+      if (typeof response === "string") {
+        try { response = JSON.parse(response); }
+        catch { response = { result: response }; }
+      }
+      if (response === null || typeof response !== "object" || Array.isArray(response)) {
+        response = { result: response };
+      }
+      if (block.is_error) {
+        response = { error: typeof block.content === "string" ? block.content : JSON.stringify(block.content) };
+      }
+      parts.push({ functionResponse: { name, response } });
+    }
+  }
+
+  // Gemini rejects empty parts arrays; emit a single space if everything
+  // collapsed away (e.g. an empty assistant text block).
+  return parts.length ? parts : [{ text: " " }];
+}
+
+// Convert Anthropic-style tool definitions (TOOLS array in tools.js)
+// to Gemini's tools array shape.
+function convertToolsToFunctionDeclarations(tools) {
+  return [{
+    functionDeclarations: tools.map(t => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema
+    }))
+  }];
+}
+
+// Convert Gemini's response to the Anthropic shape agent.js expects:
+//   { content: [{type: "text"|"tool_use", ...}], stop_reason: "tool_use"|"end_turn" }
+function convertGeminiResponseToAnthropicShape(geminiResp) {
+  const candidate = geminiResp.candidates?.[0];
+  if (!candidate) {
+    const reason = geminiResp.promptFeedback?.blockReason || "unknown";
+    throw new Error(`Gemini returned no candidates (blockReason: ${reason})`);
+  }
+
+  const parts = candidate.content?.parts || [];
+  const content = [];
+  let hasToolUse = false;
+
+  for (const p of parts) {
+    if (typeof p.text === "string" && p.text.length > 0) {
+      content.push({ type: "text", text: p.text });
+    } else if (p.functionCall) {
+      hasToolUse = true;
+      content.push({
+        type: "tool_use",
+        id: synthesizeToolUseId(),
+        name: p.functionCall.name,
+        input: p.functionCall.args || {}
+      });
+    }
+  }
+
+  if (content.length === 0) {
+    throw new Error(`Gemini response had no usable content (finishReason: ${candidate.finishReason || "unknown"})`);
+  }
+
+  return {
+    content,
+    stop_reason: hasToolUse ? "tool_use" : "end_turn"
+  };
+}
+
+// Gemini doesn't issue per-call IDs the way Anthropic does. agent.js needs
+// stable IDs to match tool_use blocks back to tool_result blocks within the
+// same conversation, so we synthesize them here.
+function synthesizeToolUseId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return `gem_${crypto.randomUUID().slice(0, 8)}`;
+  }
+  return `gem_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { callClaude, getApiKey, setApiKey, ANTHROPIC_MODEL };
+  module.exports = { callLLM, getApiKey, setApiKey, GEMINI_MODEL };
 }
